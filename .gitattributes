@@ -1,0 +1,4 @@
+* text=auto
+/.gitattributes text eol=lf
+/dist/** -text whitespace=cr-at-eol
+/dist/vendor/ocr/licenses/** whitespace=cr-at-eol,-blank-at-eof

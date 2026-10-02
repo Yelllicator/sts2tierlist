@@ -68,6 +68,7 @@
     let cropping = false, zoom = 100, controller = null, busy = false, applyBusy = false, revision = 0, serial = 0;
     let lastTier = null, editorTarget = null, editorSession = null, returnFocus = null;
     let selectionMode = 'card', selectionTool = 'add', gesture = null;
+    let tierLayout = null, pendingLayout = null, originalImage = null;
     let batchKind = null, batchReturnFocus = null, nameEditorKey = null;
     const batchSelection = new Set();
     const dialog = el('dialog', 'ssi-dialog');
@@ -75,7 +76,7 @@
     const header = el('header', 'ssi-header');
     const headingWrap = el('div', 'ssi-heading-wrap');
     const heading = el('h2', '', '截图复原'); heading.id = 'ssi-heading';
-    headingWrap.append(heading, el('span', 'ssi-local', '本机识别'));
+    headingWrap.append(heading);
     const closeButton = button('×', close, 'ssi-icon'); closeButton.setAttribute('aria-label', '关闭截图复原');
     header.append(headingWrap, closeButton);
     const file = el('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp'; file.hidden = true;
@@ -94,7 +95,7 @@
     const workspace = el('div', 'ssi-workspace'); workspace.hidden = true;
     const sourcePane = el('section', 'ssi-source-pane'); sourcePane.setAttribute('aria-label', '原始截图');
     const sourceToolbar = el('div', 'ssi-pane-heading');
-    const cropButton = button('手动框选', () => { cropping = !cropping; resetGesture(); renderSelectionTools(); }); cropButton.setAttribute('aria-pressed', 'false');
+    const cropButton = button('手动调整', () => { cropping = !cropping; resetGesture(); renderSelectionTools(); }); cropButton.setAttribute('aria-pressed', 'false');
     const zoomLabel = el('label', 'ssi-zoom-control'); zoomLabel.append(el('span', '', '缩放'));
     const zoomSlider = el('input'); zoomSlider.type = 'range'; zoomSlider.min = '50'; zoomSlider.max = '400'; zoomSlider.step = '5'; zoomSlider.value = '100'; zoomSlider.setAttribute('aria-label', '原图缩放，100% 为适应宽度');
     const zoomValue = el('output', '', '100%'); zoomSlider.addEventListener('input', () => setZoom(Number(zoomSlider.value)));
@@ -102,7 +103,7 @@
     sourceToolbar.append(el('strong', '', '原图'), zoomLabel, cropButton);
     const selectionToolbar = el('div', 'ssi-selection-toolbar'); selectionToolbar.hidden = true;
     const cardMode = button('卡牌范围', () => { selectionMode = 'card'; resetGesture(); renderSelectionTools(); });
-    const tierMode = button('评级范围', () => { selectionMode = 'tier'; resetGesture(); renderSelectionTools(); });
+    const tierMode = button('评级分隔线', () => { selectionMode = 'tier'; resetGesture(); renderSelectionTools(); });
     const addBoxTool = button('', () => { selectionTool = 'add'; renderSelectionTools(); }, 'ssi-selection-icon');
     const eraseTool = button('', () => { selectionTool = 'erase'; renderSelectionTools(); }, 'ssi-selection-icon');
     for (const [tool, name, path] of [[addBoxTool, '新增框', 'M4 4h16v16H4z M12 8v8 M8 12h8'], [eraseTool, '橡皮擦', 'M4 14 14 4l7 7-9 9H9z M8 10l7 7 M12 20h9']]) {
@@ -110,16 +111,14 @@
       const icon = el('img'); icon.alt = ''; icon.src = 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#e9c699" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`); tool.append(icon);
     }
     addBoxTool.title = '默认左键拖动新增'; eraseTool.title = '右键点击或拖动擦除；选中后也可用左键';
-    const targetTier = el('select'); targetTier.setAttribute('aria-label', '框选评级范围的目标档位');
     const selectionActions = el('div', 'ssi-selection-actions'); selectionActions.append(addBoxTool, eraseTool);
     const selectionModes = el('div', 'ssi-selection-modes'); selectionModes.append(tierMode, cardMode);
-    selectionToolbar.append(selectionActions, selectionModes, targetTier);
-    const sourceHelp = el('p', 'ssi-source-help');
+    selectionToolbar.append(selectionActions, selectionModes);
     const sourceScroll = el('div', 'ssi-source-scroll');
     const sourceStage = el('div', 'ssi-source-stage');
     const sourceImage = el('img'); sourceImage.alt = '待复原的 Tier List 截图'; sourceImage.draggable = false;
     const overlay = el('canvas', 'ssi-overlay'); overlay.setAttribute('aria-hidden', 'true');
-    sourceStage.append(sourceImage, overlay); sourceScroll.append(sourceStage); sourcePane.append(sourceToolbar, selectionToolbar, sourceHelp, sourceScroll);
+    sourceStage.append(sourceImage, overlay); sourceScroll.append(sourceStage); sourcePane.append(sourceToolbar, selectionToolbar, sourceScroll);
     const hoverPanel = el('div', 'ssi-hover-preview'); hoverPanel.hidden = true; hoverPanel.setAttribute('role', 'tooltip');
     const hoverTitle = el('strong', 'ssi-hover-title'), hoverNote = el('span', 'ssi-hover-note');
     const hoverComparison = el('div', 'ssi-hover-comparison');
@@ -148,7 +147,7 @@
     const moderateCards = button('', () => openBatch('moderate'), 'ssi-pending-link ssi-pending-moderate');
     const pendingNames = button('', () => openBatch('name'), 'ssi-pending-link ssi-pending-names');
     reviewSummary.append(criticalCards, pendingCards, moderateCards, pendingNames);
-    footerText.append(countText, reviewSummary, el('small', '', '生成到「无预设」模板，可撤销'));
+    footerText.append(countText, reviewSummary);
     const apply = button('生成排表', applyResult, 'primary'); apply.disabled = true;
     const applyNote = el('small', 'ssi-apply-note'); footerText.append(applyNote);
     footer.append(footerText, apply);
@@ -272,8 +271,8 @@
       criticalCards.disabled = pendingCards.disabled = moderateCards.disabled = pendingNames.disabled = busy || applyBusy;
       reviewSummary.hidden = !problems.items.size && !problems.nameReviews;
       footer.classList.toggle('ssi-has-pending', !reviewSummary.hidden);
-      applyNote.textContent = `可不核对直接生成${problems.duplicates ? `；${problems.duplicates} 张重复卡只保留首次位置` : ''}${problems.unknown ? `；跳过 ${problems.unknown} 张未识别卡牌` : ''}`;
-      applyNote.hidden = !tiers.length;
+      applyNote.textContent = [problems.duplicates ? `${problems.duplicates} 张重复卡只保留首次位置` : '', problems.unknown ? `跳过 ${problems.unknown} 张未识别卡牌` : ''].filter(Boolean).join('；');
+      applyNote.hidden = !applyNote.textContent;
       apply.disabled = busy || applyBusy || !tiers.length || !problems.recognized || problems.invalidNames || problems.emptyTitle;
       apply.title = problems.invalidNames ? '请填写每个评级名称（最多 300 字）' : problems.emptyTitle ? '请填写标题' : !problems.recognized ? '尚无可生成的卡牌，请选择至少一张卡牌' : applyNote.textContent;
       addTier.disabled = busy || tiers.length >= 24; cropButton.disabled = busy || !source; zoomSlider.disabled = !source;
@@ -448,16 +447,6 @@
           if (item.box && byId.has(item.id)) ctx.clearRect(item.box.x, item.box.y, item.box.width, item.box.height);
         }
       }
-      if (cropping && selectionMode === 'tier') for (const tier of tiers) {
-        if (!tier.box) continue;
-        const {x, y, width, height} = tier.box;
-        ctx.lineWidth = 2 * scale; ctx.strokeStyle = '#8ed8ff'; ctx.fillStyle = '#54bcff16'; ctx.setLineDash([8 * scale, 5 * scale]);
-        ctx.fillRect(x, y, width, height); ctx.strokeRect(x, y, width, height); ctx.setLineDash([]);
-        const label = tier.name.replace(/\s+/g, ' ').slice(0, 30), labelHeight = 20 * scale;
-        ctx.font = `${12 * scale}px sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#143b50'; ctx.fillRect(x, y, Math.min(width, ctx.measureText(label).width + 12 * scale), labelHeight);
-        ctx.fillStyle = '#ccefff'; ctx.fillText(label, x + 6 * scale, y + labelHeight / 2, Math.max(1, width - 12 * scale));
-      }
       for (const tier of tiers) for (const item of tier.cards) {
         if (!item.box) continue;
         const {x, y, width, height} = item.box;
@@ -474,6 +463,21 @@
           ctx.fillText(pending ? (level === 'critical' ? '×' : level === 'severe' ? '!!' : '!') : '✓', x + size / 2, y + size / 2);
         }
       }
+      if (cropping && selectionMode === 'tier') {
+        const layout = gesture?.layout || pendingLayout || tierLayout;
+        if (layout) layout.boundaries.forEach((y, i) => {
+          const outer = i === 0 || i === layout.boundaries.length - 1;
+          const active = gesture?.lineIndex === i;
+          ctx.lineWidth = (active ? 3 : 2) * scale; ctx.strokeStyle = active ? '#fff0b8' : '#8ed8ff';
+          ctx.setLineDash(outer ? [6 * scale, 4 * scale] : []);
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(source.width, y); ctx.stroke(); ctx.setLineDash([]);
+          const label = outer ? (i ? '底部' : '顶部') : `↕ ${i}`;
+          const handleY = bounded(y - 9 * scale, 0, source.height - 18 * scale);
+          ctx.fillStyle = active ? '#fff0b8' : '#8ed8ff'; ctx.fillRect(0, handleY, 40 * scale, 18 * scale);
+          ctx.fillStyle = '#143b50'; ctx.font = `${11 * scale}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(label, 20 * scale, handleY + 9 * scale);
+        });
+      }
       if (cropRect) {
         ctx.strokeStyle = gesture?.erase ? '#ff9d97' : '#fff0b8'; ctx.fillStyle = gesture?.erase ? '#fa605033' : '#dfc58b33'; ctx.setLineDash([6 * scale, 4 * scale]);
         ctx.fillRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height); ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height); ctx.setLineDash([]);
@@ -481,7 +485,7 @@
     }
     function hideHover() { hoverPanel.hidden = true; hoverKey = null; }
     function showHover(event) {
-      if (!source || busy || applyBusy || editor.open || batchDialog.open || gesture) { hideHover(); return; }
+      if (!source || busy || applyBusy || editor.open || batchDialog.open || gesture || (cropping && selectionMode === 'tier')) { hideHover(); return; }
       const p = point(event);
       let found = null;
       for (const tier of tiers) for (const item of tier.cards) {
@@ -648,16 +652,11 @@
       selectionToolbar.hidden = !cropping; cropButton.setAttribute('aria-pressed', String(cropping));
       cardMode.setAttribute('aria-pressed', String(selectionMode === 'card')); tierMode.setAttribute('aria-pressed', String(selectionMode === 'tier'));
       addBoxTool.setAttribute('aria-pressed', String(selectionTool === 'add')); eraseTool.setAttribute('aria-pressed', String(selectionTool === 'erase'));
-      sourceStage.classList.toggle('ssi-cropping', cropping); sourceStage.classList.toggle('ssi-erasing', cropping && selectionTool === 'erase');
+      sourceStage.classList.toggle('ssi-cropping', cropping); sourceStage.classList.toggle('ssi-erasing', cropping && selectionMode === 'card' && selectionTool === 'erase');
       sourcePane.classList.toggle('ssi-manual-active', cropping);
-      targetTier.hidden = selectionMode !== 'tier';
-      const previousValue = targetTier.value;
-      targetTier.replaceChildren();
-      for (const tier of tiers) { const option = el('option', '', `校正：${tier.name}`); option.value = String(tier.key); targetTier.append(option); }
-      if (tiers.length < 24) { const option = el('option', '', '＋ 新增评级'); option.value = 'new'; targetTier.append(option); }
-      const keepTarget = (previousValue === 'new' && tiers.length < 24) || tiers.some(tier => String(tier.key) === previousValue);
-      targetTier.value = keepTarget ? previousValue : String(lastTier || tiers[0]?.key || 'new');
-      sourceHelp.textContent = !cropping ? '100% 为适应宽度；悬停卡框可对照原图与识别结果' : selectionMode === 'tier' ? '框住一整档。右键擦除范围，保留卡牌；范围用于新增卡牌归档。' : '左键新增，右键擦除。暗色为未识别区域；粉色大概率错误，红色严重不确定，橙色比较不确定，绿色已确认。悬停可对照。';
+      selectionActions.hidden = selectionMode === 'tier';
+      for (const control of [cardMode, tierMode, addBoxTool, eraseTool]) control.disabled = busy || applyBusy;
+      overlay.style.cursor = '';
       drawOverlay();
     }
     function sortCards(tier) {
@@ -690,13 +689,86 @@
       if (previousGesture && overlay.hasPointerCapture(previousGesture.pointerId)) overlay.releasePointerCapture(previousGesture.pointerId);
       drawOverlay();
     }
-    function eraseBoxes(box, isClick, mode) {
+    function lineAt(p) {
+      if (!tierLayout) return -1;
+      const tolerance = 7 * source.height / Math.max(overlay.getBoundingClientRect().height, 1);
+      let hit = -1, nearest = Infinity;
+      tierLayout.boundaries.forEach((y, i) => { const distance = Math.abs(p.y - y); if (distance <= tolerance && distance < nearest) { hit = i; nearest = distance; } });
+      return hit;
+    }
+    function moveLine(action, y) {
+      const edges = action.layout.boundaries, i = action.lineIndex;
+      edges[i] = bounded(Math.round(y), i ? edges[i - 1] + 16 : 0, i < edges.length - 1 ? edges[i + 1] - 16 : source.height);
+    }
+    function layoutFromResult(result) {
+      if (result.tierLayout) return {...result.tierLayout, boundaries: result.tierLayout.boundaries.slice(0, 25)};
+      const rows = (result.tiers || []).filter(t => Number.isFinite(t.y0) && Number.isFinite(t.y1)).sort((a, b) => a.y0 - b.y0);
+      const label = rows.find(t => t.labelBox)?.labelBox;
+      return {boundaries: rows.length ? [...rows.map(t => t.y0), rows.at(-1).y1] : [0, source.height],
+        left: label?.x || 0, right: label ? label.x + label.width : Math.max(16, Math.round(source.width * .1)),
+        baseHeight: rows.length ? Math.max(16, Math.min(...rows.map(t => t.y1 - t.y0))) : Math.min(source.height, Math.max(16, source.width * .09))};
+    }
+    async function recognizeDivisions(layout) {
+      if (busy || !source) return;
+      closeBatch(); cancelEditor(); hideHover();
+      const thisRevision = ++revision, imageSource = source;
+      controller = new AbortController(); const signal = controller.signal;
+      busy = true; pendingLayout = layout; selected = null;
+      cancel.hidden = false; progress.hidden = false; progress.value = 0;
+      statusText.textContent = '按新分隔线重新识别卡牌…'; renderTiers();
+      const current = () => !signal.aborted && revision === thisRevision && source === imageSource;
+      try {
+        const result = await root.SpireScreenshotEngine.analyze(imageSource.getContext('2d', {willReadFrequently: true}).getImageData(0, 0, imageSource.width, imageSource.height), {
+          signal, tierLayout: layout,
+          onProgress(value) { if (current()) { progress.value = bounded(value?.progress || 0, 0, 1) * .65; statusText.textContent = value?.message || '重新识别卡牌…'; } }
+        });
+        if (!current()) return;
+        const next = reviewTiers(result, imageSource);
+        if (next.length !== layout.boundaries.length - 1) throw new Error('分档结果不完整，已保留调整前的结果');
+        // Names/colors already reviewed in untouched regions survive a new cut.
+        const changed = [];
+        next.forEach((tier, i) => {
+          const previous = tiers.find(t => t.box && t.box.y === tier.box?.y && t.box.height === tier.box?.height);
+          if (previous) { tier.name = previous.name; tier.nameNeedsReview = previous.nameNeedsReview; tier.color = previous.color; }
+          else changed.push(i);
+        });
+        const notes = (result.warnings || []).filter(note => !String(note).startsWith('评级名称需要手动填写'));
+        if (changed.length) {
+          try {
+            if (!root.SpireScreenshotOCR?.recognize) throw new Error('文字识别组件未加载');
+            const textResult = await root.SpireScreenshotOCR.recognize(imageSource, changed.map(i => result.tiers[i]), {
+              signal, original: originalImage,
+              onProgress(value) { if (current()) { progress.value = .65 + .35 * bounded(value?.progress || 0, 0, 1); statusText.textContent = value?.message || '识别新档位文字…'; } }
+            });
+            if (!current()) return;
+            changed.forEach((i, n) => {
+              const label = textResult.labels?.[n], text = String(label?.text || '').trim();
+              if (text) next[i].name = text;
+              next[i].nameNeedsReview = !text || label?.needsReview === true || text.length > 300;
+            });
+            notes.push(...(textResult.warnings || []));
+          } catch (error) {
+            if (!current()) return;
+            notes.push('新档位文字识别未完成，请手动填写档名；卡牌已重新识别');
+          }
+        }
+        if (!current()) return;
+        tiers = next; tierLayout = {...layout, boundaries: [...layout.boundaries]}; lastTier = tiers[0]?.key;
+        warningList.replaceChildren(); for (const note of notes) warningList.append(el('li', '', String(note)));
+        warningHeading.textContent = `识别提示（${notes.length}）`; warnings.hidden = !notes.length;
+        statusText.textContent = `分隔线已更新 · ${tiers.length} 档、${tiers.reduce((n, t) => n + t.cards.length, 0)} 张卡牌已重新识别`;
+      } catch (error) {
+        if (current()) statusText.textContent = `${error?.message || '重新识别失败'}；已保留原分隔线和校对结果`;
+      } finally {
+        if (thisRevision === revision) { busy = false; controller = null; pendingLayout = null; cancel.hidden = true; progress.hidden = true; renderTiers(); }
+      }
+    }
+    function eraseBoxes(box, isClick) {
       const hit = b => b && (isClick ? box.x >= b.x && box.x <= b.x + b.width && box.y >= b.y && box.y <= b.y + b.height : box.x < b.x + b.width && box.x + box.width > b.x && box.y < b.y + b.height && box.y + box.height > b.y);
       let count = 0;
-      if (mode === 'tier') for (const tier of tiers) { if (hit(tier.box)) { tier.box = null; count++; } }
-      else for (const tier of tiers) tier.cards = tier.cards.filter(item => { if (!hit(item.box)) return true; count++; return false; });
+      for (const tier of tiers) tier.cards = tier.cards.filter(item => { if (!hit(item.box)) return true; count++; return false; });
       if (selected && !findItem(selected)) selected = null;
-      statusText.textContent = mode === 'tier' ? `已清除 ${count} 个评级范围，卡牌保留` : `已擦除 ${count} 张卡牌`;
+      statusText.textContent = `已擦除 ${count} 张卡牌`;
       renderTiers();
     }
     overlay.addEventListener('contextmenu', event => { if (cropping) event.preventDefault(); });
@@ -705,8 +777,27 @@
       if (!source || busy || applyBusy || editor.open || ![0, 2].includes(event.button)) return;
       const p = point(event);
       if (cropping) {
+        if (selectionMode === 'tier') {
+          event.preventDefault();
+          if (!tierLayout) return;
+          const hit = lineAt(p), layout = {...tierLayout, boundaries: [...tierLayout.boundaries]};
+          if (event.button === 2) {
+            if (hit > 0 && hit < layout.boundaries.length - 1) { layout.boundaries.splice(hit, 1); return recognizeDivisions(layout); }
+            statusText.textContent = hit >= 0 ? '顶部和底部不能删除，可拖动调整识别范围' : '请右键点击要删除的横线'; return;
+          }
+          let lineIndex = hit;
+          if (lineIndex < 0) {
+            const y = Math.round(p.y), edges = layout.boundaries;
+            if (edges.length >= 25) { statusText.textContent = '最多支持24档'; return; }
+            if (y < edges[0] + 16 || y > edges.at(-1) - 16 || edges.some(edge => Math.abs(edge - y) < 16)) { statusText.textContent = '新分隔线需要与相邻横线保持距离；图外区域可拖动顶部或底部纳入'; return; }
+            if (tiers.some(t => t.cards.some(({box: b}) => b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height))) { statusText.textContent = '请在卡牌之间或左侧标签栏的空白处加线'; return; }
+            edges.push(y); edges.sort((a, b) => a - b); lineIndex = edges.indexOf(y);
+          }
+          cropStart = p; gesture = {pointerId: event.pointerId, mode: 'tier', layout, lineIndex};
+          overlay.setPointerCapture(event.pointerId); drawOverlay(); return;
+        }
         event.preventDefault(); cropStart = p; cropRect = null;
-        gesture = {pointerId: event.pointerId, erase: event.button === 2 || selectionTool === 'erase', mode: selectionMode, tierKey: targetTier.value};
+        gesture = {pointerId: event.pointerId, erase: event.button === 2 || selectionTool === 'erase', mode: selectionMode};
         overlay.setPointerCapture(event.pointerId); return;
       }
       if (event.button !== 0) return;
@@ -716,32 +807,52 @@
       }
     });
     overlay.addEventListener('pointermove', event => {
+      if (cropping && selectionMode === 'tier') {
+        const p = point(event);
+        overlay.style.cursor = busy ? 'progress' : lineAt(p) >= 0 || gesture ? 'ns-resize' : 'crosshair';
+        if (gesture?.mode === 'tier' && gesture.pointerId === event.pointerId) { moveLine(gesture, p.y); drawOverlay(); }
+        return;
+      }
       if (!cropStart || gesture?.pointerId !== event.pointerId) { showHover(event); return; }
       const p = point(event); cropRect = {x: Math.min(p.x, cropStart.x), y: Math.min(p.y, cropStart.y), width: Math.abs(p.x - cropStart.x), height: Math.abs(p.y - cropStart.y)}; drawOverlay();
     });
     overlay.addEventListener('pointerup', event => {
       if (!cropStart || gesture?.pointerId !== event.pointerId) return;
+      if (gesture.mode === 'tier') {
+        moveLine(gesture, point(event).y);
+        const layout = gesture.layout; resetGesture();
+        if (layout.boundaries.some((y, i) => y !== tierLayout.boundaries[i]) || layout.boundaries.length !== tierLayout.boundaries.length) return recognizeDivisions(layout);
+        return;
+      }
       const p = point(event), box = {x: Math.min(p.x, cropStart.x), y: Math.min(p.y, cropStart.y), width: Math.abs(p.x - cropStart.x), height: Math.abs(p.y - cropStart.y)};
       const action = gesture, clickPoint = cropStart, clickDistance = Math.hypot(box.width, box.height) * sourceStage.clientWidth / source.width;
       resetGesture();
-      if (action.erase) { eraseBoxes(clickDistance < 5 ? {...clickPoint, width: 0, height: 0} : box, clickDistance < 5, action.mode); return; }
+      if (action.erase) { eraseBoxes(clickDistance < 5 ? {...clickPoint, width: 0, height: 0} : box, clickDistance < 5); return; }
       if (box.width < 8 || box.height < 8) { statusText.textContent = '框选范围太小，请拖出完整范围'; return; }
-      if (action.mode === 'tier') {
-        let tier = tiers.find(value => String(value.key) === action.tierKey);
-        if (!tier && tiers.length < 24) {
-          tier = {key: ++serial, name: '新评级', color: '#d6c08a', cards: []}; tiers.push(tier);
-        }
-        if (tier) {
-          tier.box = box; lastTier = tier.key; targetTier.value = String(tier.key);
-          tiers.sort((a, b) => a.box && b.box ? a.box.y - b.box.y : a.box ? -1 : b.box ? 1 : 0);
-          statusText.textContent = `已设置「${tier.name}」的评级范围，可在右侧修改档名`; renderTiers();
-        }
-      } else addCard(inferredTier(box), box);
+      addCard(inferredTier(box), box);
     });
     overlay.addEventListener('pointercancel', resetGesture);
     overlay.addEventListener('lostpointercapture', () => { if (gesture) resetGesture(); });
     overlay.addEventListener('pointerleave', hideHover);
     sourceScroll.addEventListener('scroll', hideHover);
+
+    function reviewTiers(result, canvas) {
+      const ratioX = canvas.width / (result.width || canvas.width), ratioY = canvas.height / (result.height || canvas.height);
+      return (result.tiers || []).slice(0, 24).map((tier, i) => ({
+        key: ++serial, name: String(tier.name || `档位 ${i + 1}`), nameNeedsReview: true, color: validColor(tier.color),
+        box: tier.box ? {x: tier.box.x * ratioX, y: tier.box.y * ratioY, width: tier.box.width * ratioX, height: tier.box.height * ratioY} : Number.isFinite(tier.y0) && Number.isFinite(tier.y1) ? {x: 0, y: tier.y0 * ratioY, width: canvas.width, height: (tier.y1 - tier.y0) * ratioY} : null,
+        labelBox: tier.labelBox ? {x: tier.labelBox.x * ratioX, y: tier.labelBox.y * ratioY, width: tier.labelBox.width * ratioX, height: tier.labelBox.height * ratioY} : null,
+        cards: (tier.cards || []).slice(0, cards.length).map(item => {
+          const candidates = (item.candidates || []).filter(candidate => byId.has(candidate.id)).slice(0, 8);
+          const id = byId.has(item.id) ? item.id : null;
+          const confidence = Number.isFinite(item.confidence) ? item.confidence : 0;
+          const review = root.SpireScreenshotEngine.classifyReview?.({...item, id, candidates, confidence}) || {reviewLevel: item.reviewLevel || (item.needsReview || confidence < 0.72 ? 'severe' : 'none'), reviewReason: item.reviewReason || ''};
+          const box = item.box ? {x: item.box.x * ratioX, y: item.box.y * ratioY, width: item.box.width * ratioX, height: item.box.height * ratioY} : null;
+          const reviewReason = String(review.reviewReason || '').slice(0, 120);
+          return {key: ++serial, id, candidates, confidence, reviewLevel: review.reviewLevel, confirmed: !!id && review.reviewLevel === 'none', box, reviewReason};
+        })
+      }));
+    }
 
     async function loadFile(chosen) {
       if (!chosen || applyBusy) return;
@@ -767,7 +878,8 @@
         if (signal.aborted || thisRevision !== revision) return;
         if (!previewBlob) throw new Error('截图预览生成失败，请重试');
         objectUrl = URL.createObjectURL(previewBlob);
-        source = canvas;
+        source = canvas; originalImage = {blob: chosen, width, height, analysisWidth: canvas.width, analysisHeight: canvas.height};
+        tierLayout = layoutFromResult({tiers: []}); pendingLayout = null;
         if (sourceUrl) URL.revokeObjectURL(sourceUrl);
         sourceUrl = objectUrl; objectUrl = null; sourceImage.src = sourceUrl;
         sourceStage.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
@@ -787,21 +899,8 @@
           }
         });
         if (signal.aborted || thisRevision !== revision) return;
-        const ratioX = canvas.width / (result.width || canvas.width), ratioY = canvas.height / (result.height || canvas.height);
-        tiers = (result.tiers || []).slice(0, 24).map((tier, i) => ({
-          key: ++serial, name: String(tier.name || `档位 ${i + 1}`), nameNeedsReview: true, color: validColor(tier.color),
-          box: tier.box ? {x: tier.box.x * ratioX, y: tier.box.y * ratioY, width: tier.box.width * ratioX, height: tier.box.height * ratioY} : Number.isFinite(tier.y0) && Number.isFinite(tier.y1) ? {x: 0, y: tier.y0 * ratioY, width: canvas.width, height: (tier.y1 - tier.y0) * ratioY} : null,
-          labelBox: tier.labelBox ? {x: tier.labelBox.x * ratioX, y: tier.labelBox.y * ratioY, width: tier.labelBox.width * ratioX, height: tier.labelBox.height * ratioY} : null,
-          cards: (tier.cards || []).slice(0, cards.length).map(item => {
-            const candidates = (item.candidates || []).filter(candidate => byId.has(candidate.id)).slice(0, 8);
-            const id = byId.has(item.id) ? item.id : null;
-            const confidence = Number.isFinite(item.confidence) ? item.confidence : 0;
-            const review = root.SpireScreenshotEngine.classifyReview?.({...item, id, candidates, confidence}) || {reviewLevel: item.reviewLevel || (item.needsReview || confidence < 0.72 ? 'severe' : 'none'), reviewReason: item.reviewReason || ''};
-            const box = item.box ? {x: item.box.x * ratioX, y: item.box.y * ratioY, width: item.box.width * ratioX, height: item.box.height * ratioY} : null;
-            const reviewReason = String(review.reviewReason || '').slice(0, 120);
-            return {key: ++serial, id, candidates, confidence, reviewLevel: review.reviewLevel, confirmed: !!id && review.reviewLevel === 'none', box, reviewReason};
-          })
-        }));
+        tiers = reviewTiers(result, canvas);
+        tierLayout = layoutFromResult(result);
         if (!tiers.length) tiers.push({key: ++serial, name: '档位 1', color: '#d6c08a', cards: []});
         lastTier = tiers[0].key;
         const notes = (result.warnings || []).filter(note => !String(note).startsWith('评级名称需要手动填写'));
@@ -838,7 +937,7 @@
         }
         warningList.replaceChildren(); for (const note of notes) warningList.append(el('li', '', String(note)));
         warningHeading.textContent = `识别提示（${notes.length}）`; warnings.hidden = !notes.length;
-        statusText.textContent = tiers.some(tier => tier.cards.length) ? '识别完成 · 点击卡牌校对，档名可编辑' : '未定位到卡牌，可开启手动框选或添加卡牌';
+        statusText.textContent = tiers.some(tier => tier.cards.length) ? '识别完成' : '未定位到卡牌';
       } catch (error) {
         if (signal.aborted || thisRevision !== revision) return;
         statusText.textContent = error?.message || '截图无法读取，请换一张图片重试';
@@ -851,10 +950,10 @@
     }
     function abort(showMessage = true) {
       if (!busy) return;
-      controller?.abort(); controller = null; ++revision; busy = false;
+      controller?.abort(); controller = null; ++revision; busy = false; pendingLayout = null;
       root.SpireScreenshotEngine?.releaseWorker?.();
       cancel.hidden = true; progress.hidden = true;
-      statusText.textContent = '已取消识别';
+      statusText.textContent = '已取消识别，保留上次完成的结果';
       if (showMessage) {
         if (source && !tiers.length) { tiers = [{key: ++serial, name: '档位 1', color: '#d6c08a', cards: []}]; lastTier = tiers[0].key; }
       }

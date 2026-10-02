@@ -41,10 +41,8 @@
       if(multiple) {if(!best||score>best.score)best={x,runs:valid,score};}
       else if(valid.length===1&&valid[0].y1-valid[0].y0>=Math.max(24,h*.2)&&(!single||score>single.score))single={x,runs:valid,score};
     }
-    // A single tier has no color transitions. Accept a bounded label rectangle
-    // only when it contains no full-width internal dividers; otherwise a same-
-    // color multi-tier table would be silently collapsed into one rank.
-    if(!best&&single&&!hasInternalDivider(im,single.runs[0]))best=single;
+    // Same-color rows can share one color run; recover their rules below.
+    if(!best&&single)best=single;
     if(!best)return [];
     const out=[];
     for(const r of best.runs) {
@@ -70,16 +68,26 @@
       if(previous&&distance(previous.color,r.color)<18&&r.y0-previous.y1<Math.max(5,h*.012))previous.y1=r.y1;
       else merged.push(r);
     }
-    return merged;
+    return merged.flatMap(r=>splitLabelDividers(im,r));
   }
-  function hasInternalDivider(im,r) {
-    const [left,right]=r.extent,margin=Math.max(4,(r.y1-r.y0)*.035);
-    for(let y=Math.ceil(r.y0+margin);y<r.y1-margin;y++) {
-      let different=0;
-      for(let i=0;i<20;i++)if(distance(pixel(im,left+(right-left)*(.08+.84*(i+.5)/20),y),r.color)>60)different++;
-      if(different>=19)return true;
+  function splitLabelDividers(im,r) {
+    const width=r.x1-r.x0,minHeight=16,lines=[];
+    // A rule crosses almost the entire label in one contrasting color.
+    // Text and card-row gaps are not tier boundaries. Scan only the label,
+    // so tightly packed cards or an empty tier do not hide a genuine rule.
+    for(let y=r.y0;y<r.y1;y++) {
+      const colors=Array.from({length:40},(_,i)=>pixel(im,r.x0+width*(.06+.88*(i+.5)/40),y));
+      const tone=[0,1,2].map(z=>median(colors.map(c=>c[z])));
+      lines.push(distance(tone,r.color)>60&&colors.filter(c=>distance(c,tone)<32).length>=38?1:0);
     }
-    return false;
+    const cuts=[];let previous=r.y0;
+    for(const [a,b] of spans(lines,1)) {
+      const edge=r.y0+Math.floor((a+b)/2);
+      if(b-a>Math.max(4,width*.06)||edge-previous<minHeight||r.y1-edge<minHeight)continue;
+      cuts.push(edge);previous=edge;
+    }
+    const edges=[r.y0,...cuts,r.y1];
+    return edges.slice(1).map((end,i)=>({...r,y0:edges[i],y1:end}));
   }
   function labelExtent(im,r,seedX,cache) {
     const key=[r.y0,r.y1,...r.color].join(',');
@@ -314,6 +322,15 @@
     if(!Number.isInteger(image?.width)||!Number.isInteger(image?.height)||image.width<1||image.height<1||image.width*image.height>32000000||image.data?.length!==image.width*image.height*4)throw new Error('图片尺寸无效或过大，请先缩小截图。');
   }
   function checkAbort(signal) {if(signal?.aborted)throw new DOMException('识别已取消','AbortError');}
+  function manualLabels(image,layout) {
+    const {boundaries,left,right,baseHeight}=layout||{};
+    if(!Array.isArray(boundaries)||boundaries.length<2||boundaries.length>25||
+      !boundaries.every((y,i)=>Number.isFinite(y)&&y>=0&&y<=image.height&&(!i||y-boundaries[i-1]>=16))||
+      !Number.isFinite(left)||!Number.isFinite(right)||left<0||right-left<16||right>=image.width||
+      !Number.isFinite(baseHeight)||baseHeight<12||baseHeight>image.height)throw new Error('评级分隔线无效，请保留至少16像素的档高和有效标签栏。');
+    return boundaries.slice(1).map((y1,i)=>({y0:boundaries[i],y1,x0:left,x1:right,
+      color:background(image,left+3,boundaries[i]+3,right-3,y1-3)}));
+  }
   async function analyzeBoxCore(image,box,index,options={}) {
     validateImage(image);checkAbort(options.signal);
     if(!box||!['x','y','width','height'].every(k=>Number.isFinite(box[k]))||box.width<=0||box.height<=0)throw new Error('卡牌框范围无效，请重新框选。');
@@ -334,12 +351,12 @@
     if(!Array.isArray(index?.cards)||!index.cards.length)throw new Error('本地卡牌识别图库不完整。');
     check();progress({phase:'layout',progress:.08,message:'定位评级与卡牌'});
     index=prepareIndex(index);
-    const found=labels(image);
-    if(!found.length)return {width:image.width,height:image.height,tiers:[],warnings:['未能区分评级栏。请保留完整的左侧评级栏；各档全部同色的截图暂需手动分档。']};
+    const found=options.tierLayout?manualLabels(image,options.tierLayout):labels(image);
+    if(!found.length)return {width:image.width,height:image.height,tiers:[],warnings:['未能区分评级栏。请保留完整的左侧评级栏和分隔线；同色且无清晰分隔线的截图可能需要手动分档。']};
     let heightRows=found;
     const allHeights=found.map(r=>r.y1-r.y0),typicalHeight=median(allHeights);
     heightRows=found.filter(r=>!(r.y1>=image.height-2&&r.y1-r.y0<typicalHeight*.75));
-    const heights=(heightRows.length?heightRows:found).map(r=>r.y1-r.y0).sort((a,b)=>a-b),baseHeight=median(heights.filter(h=>h<heights[0]*1.3));
+    const heights=(heightRows.length?heightRows:found).map(r=>r.y1-r.y0).sort((a,b)=>a-b),baseHeight=options.tierLayout?.baseHeight||median(heights.filter(h=>h<heights[0]*1.3));
     const frame=contentFrame(image,found,baseHeight);
     const tiers=found.map((t,i)=>({name:'评级 '+(i+1),color:'#'+t.color.map(v=>v.toString(16).padStart(2,'0')).join(''),y0:t.y0,y1:t.y1,cards:boxesForTier(image,t,baseHeight,frame),labelBox:{x:t.x0,y:t.y0,width:t.x1-t.x0,height:t.y1-t.y0}}));
     const denseCards=splitDenseCards(image,tiers,index);
@@ -350,8 +367,8 @@
     for(const t of tiers)t.cards=t.cards.filter(b=>!(b.width<medianW*.66&&b.height<medianH*.8));
     const warnings=['评级名称需要手动填写；请核对标记为待确认的卡牌。'];
     let ignoredEmpty=0;
-    while(tiers.length&&tiers[0].cards.length===0){tiers.shift();ignoredEmpty++;}
-    while(tiers.length&&tiers.at(-1).cards.length===0){tiers.pop();ignoredEmpty++;}
+    while(!options.tierLayout&&tiers.length&&tiers[0].cards.length===0){tiers.shift();ignoredEmpty++;}
+    while(!options.tierLayout&&tiers.length&&tiers.at(-1).cards.length===0){tiers.pop();ignoredEmpty++;}
     if(ignoredEmpty)warnings.push('已忽略首尾没有卡牌的色块；如果它们是空评级，请手动补回。');
     tiers.forEach((t,i)=>t.name='评级 '+(i+1));
     const total=tiers.reduce((n,t)=>n+t.cards.length,0);let done=0;
@@ -369,7 +386,8 @@
     }
     progress({phase:'done',progress:1,message:'识别完成'});
     if(tiers.some(t=>t.cards.some(c=>c.cropped)))warnings.push('截图底部有卡面被截断，已保留并标记为待确认。');
-    return {width:image.width,height:image.height,tiers,warnings};
+    const tierLayout=tiers.length?{boundaries:[...tiers.map(t=>t.y0),tiers.at(-1).y1],left:median(tiers.map(t=>t.labelBox.x)),right:median(tiers.map(t=>t.labelBox.x+t.labelBox.width)),baseHeight}:null;
+    return {width:image.width,height:image.height,tiers,warnings,tierLayout};
   }
   const indexCache=new Map();
   async function loadIndex(url) {
@@ -401,7 +419,7 @@
       options.signal?.addEventListener('abort',abort,{once:true});
       worker.onmessage=event=>{const d=event.data;if(d.type==='progress')options.onProgress?.(d.value);else if(cleanup(d.type==='result')){d.type==='result'?resolve(d.value):reject(new Error(d.message));}};
       worker.onerror=e=>{if(cleanup(false))reject(new Error(e.message||'本地识别器启动失败'));};
-      try {const data=new Uint8ClampedArray(imageData.data);worker.postMessage({type,image:{width:imageData.width,height:imageData.height,data},box,indexUrl},[data.buffer]);}
+      try {const data=new Uint8ClampedArray(imageData.data);worker.postMessage({type,image:{width:imageData.width,height:imageData.height,data},box,indexUrl,tierLayout:options.tierLayout},[data.buffer]);}
       catch(error){if(cleanup(false))reject(error);}
     });
   }
@@ -418,7 +436,7 @@
   global.SpireScreenshotEngine=api;
   if(typeof WorkerGlobalScope!=='undefined'&&global instanceof WorkerGlobalScope)global.onmessage=async event=>{
     if(!['analyze','analyze-box'].includes(event.data.type))return;
-    try {const index=await loadIndex(event.data.indexUrl),options={onProgress:value=>global.postMessage({type:'progress',value})};const value=event.data.type==='analyze-box'?await analyzeBoxCore(event.data.image,event.data.box,index,options):await analyzeCore(event.data.image,index,options);global.postMessage({type:'result',value});}
+    try {const index=await loadIndex(event.data.indexUrl),options={tierLayout:event.data.tierLayout,onProgress:value=>global.postMessage({type:'progress',value})};const value=event.data.type==='analyze-box'?await analyzeBoxCore(event.data.image,event.data.box,index,options):await analyzeCore(event.data.image,index,options);global.postMessage({type:'result',value});}
     catch(error){global.postMessage({type:'error',message:error.message});}
   };
 })(typeof self!=='undefined'?self:globalThis);

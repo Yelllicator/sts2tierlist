@@ -46,7 +46,8 @@ window.SpirePng = (() => {
     const theme={...(template?.theme||{bg:'#111811',row:'#131a12',alternate:'#182016',line:'#3d4836'})};
     const width=1500,labelW=doc.tiers.some(t=>t.name.length>24||t.name.includes('\n'))?224:130,pad=12,gap=8,columns=10;
     const cardW=(width-labelW-pad*2-gap*(columns-1))/columns;
-    const faceH=cardW*1.3,cardH=faceH+32;
+    const hasForeign=doc.tiers.some(t=>doc.rows[t.id].some(id=>byId.get(id)?.unavailableInVersion));
+    const faceH=cardW*1.3,cardH=faceH+(hasForeign?48:32);
     const canvas=document.createElement('canvas');
     try{
       const ctx=canvas.getContext('2d');
@@ -66,7 +67,7 @@ window.SpirePng = (() => {
       canvas.width=outputWidth;canvas.height=outputHeight;ctx.scale(scale,scale);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
       ctx.fillStyle=theme.bg;ctx.fillRect(0,0,width,height);ctx.fillStyle='#e8dfc8';ctx.font='600 36px "Microsoft YaHei",sans-serif';ctx.textAlign='left';
       titleLines.forEach((line,i)=>ctx.fillText(line,35,46+i*44));
-      if(doc.gameVersion){ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillStyle='#b9b5ab';ctx.fillText('v'+doc.gameVersion+(doc.tiers.some(t=>doc.rows[t.id].some(id=>byId.get(id)?.unavailableInVersion))?' · † 此版本未收录，保留来源卡面':''),35,head-20);}
+      if(doc.gameVersion){ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillStyle='#b9b5ab';ctx.fillText('v'+doc.gameVersion+(hasForeign?' · † 版本外卡牌，保留所选卡面与规则':''),35,head-20);}
       let y=head;
       for(let i=0;i<doc.tiers.length;i++){
         const tier=doc.tiers[i];
@@ -83,7 +84,9 @@ window.SpirePng = (() => {
           ctx.drawImage(image,x+(cardW-image.width*ratio)/2,cy+(faceH-image.height*ratio)/2,image.width*ratio,image.height*ratio);
           image=null;
           ctx.fillStyle='#e7e8db';ctx.font='15px "Microsoft YaHei",sans-serif';
-          lines(ctx,card.name+(card.unavailableInVersion?' †':''),cardW).forEach((line,n)=>ctx.fillText(line,x+cardW/2,cy+faceH+17+n*16));
+          const nameLines=lines(ctx,card.name+(card.unavailableInVersion?' †':''),cardW);
+          nameLines.forEach((line,n)=>ctx.fillText(line,x+cardW/2,cy+faceH+17+n*16));
+          if(card.unavailableInVersion){ctx.font='12px "Microsoft YaHei",sans-serif';ctx.fillStyle='#b9b5ab';ctx.fillText('v'+card.gameVersion,x+cardW/2,cy+faceH+17+nameLines.length*16);}
         }
         y+=heights[i];ctx.strokeStyle=theme.line;ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();
       }

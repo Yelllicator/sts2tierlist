@@ -29,7 +29,7 @@
   const SORT_COLORS=['ironclad','silent','regent','necrobinder','defect','colorless'];
   const SORT_RARITIES=['基础','普通','罕见','稀有','古老'];
   const SORT_TYPES=['攻击','技能','能力'];
-  const DEFAULT_POOL_SORT=Object.freeze(['rarity','cost','type'].map(key=>Object.freeze({key,direction:'none'})));
+  const DEFAULT_POOL_SORT=Object.freeze(['rarity','type','cost'].map(key=>Object.freeze({key,direction:'desc'})));
   function normalizePoolSort(input){
     if(input===undefined)return DEFAULT_POOL_SORT.map(item=>({...item}));
     if(!Array.isArray(input)||input.length!==3)throw Error('待排排序需包含稀有度、费用和类型三个条件');
@@ -73,6 +73,12 @@
   }
   function createModel(cards,reference,versionCatalog=null){
     const known=new Set(cards.map(c=>c.id));
+    const hasCardRefs=typeof versionCatalog?.hasCardRef==='function'&&typeof versionCatalog?.resolve==='function';
+    const isKnown=id=>typeof id==='string'&&(known.has(id)||(hasCardRefs&&versionCatalog.hasCardRef(id)));
+    function cardIdentity(id,gameVersion){
+      if(!hasCardRefs)return id;
+      const card=versionCatalog.resolve(id,gameVersion);return card.baseId+'@'+card.gameVersion;
+    }
     function versionFields(id){
       if(!versionCatalog)return {};
       if(typeof id!=='string'||!versionCatalog.hasVersion(id))throw Error('游戏版本无效');
@@ -84,7 +90,7 @@
       const version=versionFields(gameVersion);
       const tiers=clone(DEFAULT_TIERS),rows=Object.fromEntries(tiers.map(t=>[t.id,[]]));
       rows.pool=templateId==='custom'?[]:versionCards(gameVersion).filter(c=>colorOf(c)===templateId).map(c=>c.id);
-      return {version:3,...version,templateId,title:templateId==='custom'?'我的卡牌排行':template.name+' · 卡牌排行',language,tiers,rows};
+      return {version:3,...version,templateId,title:templateId==='custom'?'我的卡牌排行':template.name+' · 卡牌排行',language,tiers,rows,poolSort:normalizePoolSort()};
     }
     function original(language='en',gameVersion=versionCatalog?.legacyVersion){
       const doc=createTemplate('silent',language,gameVersion);
@@ -95,7 +101,7 @@
     }
     function validate(input){
       if(!input||typeof input!=='object'||Array.isArray(input))throw Error('方案格式不正确');
-      const poolSort=Object.hasOwn(input,'poolSort')?{poolSort:normalizePoolSort(input.poolSort)}:{};
+      const poolSort={poolSort:normalizePoolSort(Object.hasOwn(input,'poolSort')?input.poolSort:undefined)};
       let value=input;
       if(value.version===1)value={...createTemplate('silent','en',versionCatalog?.legacyVersion),title:DEFAULT_TITLE,rows:value.rows};
       else if(value.version===2)value={...value,version:3,...(versionCatalog?{gameVersion:versionCatalog.legacyVersion}:{}),templateId:'silent'};
@@ -119,8 +125,10 @@
       for(const id of required){
         if(!Object.hasOwn(value.rows,id)||!Array.isArray(value.rows[id]))throw Error('方案缺少评级中的卡牌列表');
         rows[id]=value.rows[id].map(card=>{
-          if(!known.has(card)||seen.has(card))throw Error('方案含未知或重复卡牌');
-          seen.add(card);return card;
+          if(!isKnown(card))throw Error('方案含未知或重复卡牌');
+          const identity=cardIdentity(card,version.gameVersion);
+          if(seen.has(identity))throw Error('方案含未知或重复卡牌');
+          seen.add(identity);return card;
         });
       }
       // Membership is intentional: omitted cards stay excluded, including after reload.
@@ -129,11 +137,19 @@
     function setPoolSort(doc,settings){return {...validate(doc),poolSort:normalizePoolSort(settings)};}
     function setGameVersion(doc,id){
       if(!versionCatalog)throw Error('未配置游戏版本目录');
-      const next=validate(doc);return {...next,...versionFields(id)};
+      const next=validate(doc),version=versionFields(id);
+      if(hasCardRefs){
+        const fixed=new Set(Object.values(next.rows).flat().filter(ref=>versionCatalog.hasCardRef(ref)));
+        // A plain ID follows the board version until that would duplicate an explicitly selected snapshot.
+        // Freeze that plain ID at its previous definition to preserve both cards and their positions.
+        for(const [row,ids] of Object.entries(next.rows))next.rows[row]=ids.map(ref=>
+          !versionCatalog.hasCardRef(ref)&&fixed.has(cardIdentity(ref,id))?cardIdentity(ref,next.gameVersion):ref);
+      }
+      return validate({...next,...version});
     }
     function locate(doc,id){return Object.keys(doc.rows).find(t=>doc.rows[t].includes(id));}
     function move(doc,id,tier,before=null){
-      if(!known.has(id)||!locate(doc,id)||!Object.hasOwn(doc.rows,tier)||id===before)return clone(doc);
+      if(!isKnown(id)||!locate(doc,id)||!Object.hasOwn(doc.rows,tier)||id===before)return clone(doc);
       const next=clone(doc);for(const row of Object.values(next.rows)){const at=row.indexOf(id);if(at>=0)row.splice(at,1);}
       const at=before?next.rows[tier].indexOf(before):-1;next.rows[tier].splice(at<0?next.rows[tier].length:at,0,id);return validate(next);
     }
@@ -143,9 +159,10 @@
       const next=clone(doc);next.rows.pool.push(...next.rows[id]);delete next.rows[id];next.tiers=next.tiers.filter(t=>t.id!==id);return validate(next);
     }
     function setPool(doc,ids){
-      if(!Array.isArray(ids)||ids.some(id=>!known.has(id)))throw Error('待排卡牌列表无效');
-      const next=clone(doc),ranked=new Set(doc.tiers.flatMap(t=>doc.rows[t.id]));
-      next.rows.pool=[...new Set(ids)].filter(id=>!ranked.has(id));return validate(next);
+      if(!Array.isArray(ids)||ids.some(id=>!isKnown(id)))throw Error('待排卡牌列表无效');
+      const next=validate(doc),seen=new Set(next.tiers.flatMap(t=>next.rows[t.id]).map(id=>cardIdentity(id,next.gameVersion)));
+      next.rows.pool=ids.filter(id=>{const identity=cardIdentity(id,next.gameVersion);if(seen.has(identity))return false;seen.add(identity);return true;});
+      return validate(next);
     }
     const addToPool=(doc,ids)=>setPool(doc,[...doc.rows.pool,...ids]);
     const removeFromPool=(doc,ids)=>{const remove=new Set(ids);return setPool(doc,doc.rows.pool.filter(id=>!remove.has(id)));};
@@ -169,13 +186,14 @@
         const id='screenshot_'+index;
         tiers.push({id,name:tier.name,color:tier.color});
         rows[id]=tier.cards.map(card=>{
-          if(typeof card!=='string'||!known.has(card))throw Error('请先确认所有卡牌，或移除无法识别的图片');
-          if(ranked.has(card))throw Error('截图中存在重复卡牌，请先校对');
-          ranked.add(card);return card;
+          if(!isKnown(card))throw Error('请先确认所有卡牌，或移除无法识别的图片');
+          const identity=cardIdentity(card,base.gameVersion);
+          if(ranked.has(identity))throw Error('截图中存在重复卡牌，请先校对');
+          ranked.add(identity);return card;
         });
       });
       if(!ranked.size)throw Error('请至少选择一张卡牌');
-      rows.pool=Object.values(base.rows).flat().filter(id=>!ranked.has(id));
+      rows.pool=Object.values(base.rows).flat().filter(id=>!ranked.has(cardIdentity(id,base.gameVersion)));
       return validate({...base,title:draft.title,tiers,rows});
     }
     function validateWorkspace(input){

@@ -101,10 +101,43 @@
     }
     const b=[...bins.values()].sort((a,b)=>b.n-a.n)[0];return b?b.sum.map(v=>Math.round(v/b.n)):[20,20,20];
   }
-  function boxesForTier(im,tier,baseHeight) {
-    const w=im.width,x0=Math.min(w-1,tier.x1+2),x1=w-2;
-    const edgeWidth=Math.max(16,Math.round(w*.03));
-    const bg=background(im,w-edgeWidth,tier.y0+5,w-4,tier.y1-5);
+  function contentFrame(im,tiers,baseHeight) {
+    const left=median(tiers.map(t=>t.x1))+2;
+    // The outer image edge may be a page margin or a tool rail, not the table
+    // background. Pool all rows so a densely filled row cannot choose a card's
+    // repeated text-box color as its background.
+    const bg=background(im,left,tiers[0].y0+2,im.width-2,tiers.at(-1).y1-2);
+    const positions=tiers.flatMap(t=>Array.from({length:18},(_,i)=>t.y0+(t.y1-t.y0)*(i+.5)/18));
+    const columns=[];
+    for(let x=Math.floor(left);x<im.width-1;x++) {
+      const bins=new Map();let matching=0;
+      for(const y of positions) {
+        const c=pixel(im,x,y);if(distance(c,bg)<32)matching++;
+        const key=c.map(v=>Math.round(v/16)).join(',');
+        const bin=bins.get(key)||{count:0,color:c};bin.count++;bins.set(key,bin);
+      }
+      const dominant=[...bins.values()].sort((a,b)=>b.count-a.count)[0];
+      columns.push({matching:matching/positions.length,flat:dominant.count/positions.length,color:dominant.color});
+    }
+    const strip=Math.max(12,Math.round(baseHeight*.22));
+    let right=im.width-2;
+    // A right-side rail has a flat background running across tiers, separated
+    // from the cards by a strip of empty table. Card edges alone do not qualify.
+    for(let i=Math.max(strip,Math.floor((im.width*.5-left)));i<columns.length-strip;i++) {
+      if(columns[i].flat<.8||distance(columns[i].color,bg)<=32)continue;
+      const before=columns.slice(i-strip,i),after=columns.slice(i,i+strip);
+      if(before.filter(c=>c.matching>.82).length<strip*.9)continue;
+      if(after.filter(c=>c.flat>.6&&distance(c.color,columns[i].color)<24).length<strip*.8)continue;
+      let edges=0;
+      for(const tier of tiers)for(const y of [tier.y0+1,tier.y1-2])if(distance(pixel(im,left+i+3,y),columns[i].color)<24)edges++;
+      if(edges<tiers.length*1.7)continue;
+      right=Math.floor(left)+i;break;
+    }
+    return {bg,right};
+  }
+  function boxesForTier(im,tier,baseHeight,frame) {
+    const w=im.width,x0=Math.min(w-1,tier.x1+2),x1=frame?.right??w-2;
+    const bg=frame?.bg||background(im,x0,tier.y0+5,x1,tier.y1-5);
     const active=[];
     for(let y=tier.y0+2;y<tier.y1-2;y++) {
       let count=0;for(let x=x0;x<x1;x+=3)if(distance(pixel(im,x,y),bg)>32)count++;
@@ -216,6 +249,26 @@
       for(let z=0;z<3;z++){const d=sample[p*3+z]-ref[p*4+z];sum+=d*d*wt;weight+=wt;}
     }return sum/Math.max(1,weight)/65025;
   }
+  function classifyReview(match={}) {
+    let reviewLevel='none',reviewReason='';
+    const hasConfidence=Number.isFinite(match.confidence),confidence=hasConfidence?match.confidence:0;
+    const candidates=Array.isArray(match.candidates)?match.candidates:[];
+    const closeCandidates=candidates.length>1&&Number.isFinite(candidates[0].score)&&Number.isFinite(candidates[1].score)&&candidates[0].score-candidates[1].score<.03;
+    // Matching confidence is a heuristic, not a calibrated probability. Keep
+    // review policy shared by Worker results and the importer, independent of
+    // the descriptor ranking and any legacy needsReview value on the input.
+    // Reserve the highest level for missing results or exceptionally weak
+    // matches. A close runner-up or a cropped edge alone is only advisory.
+    if(!match.id) {reviewLevel='critical';reviewReason='未能识别卡牌，请选择对应卡牌';}
+    else if(!hasConfidence) {reviewLevel='critical';reviewReason='识别结果缺少有效分数，请核对';}
+    else if(confidence<.28) {reviewLevel='critical';reviewReason='匹配分数极低，当前卡牌可能不正确，请核对';}
+    else if(match.clipped||match.cropped) {reviewLevel='severe';reviewReason='卡面被截图边缘截断，请核对';}
+    else if(confidence<.48) {reviewLevel='severe';reviewReason='匹配分数较低，请优先核对';}
+    else if(confidence<.65||closeCandidates) {
+      reviewLevel='moderate';reviewReason=closeCandidates?'前两项候选接近，建议核对':'匹配分数偏低，建议核对';
+    }
+    return {reviewLevel,reviewReason,needsReview:reviewLevel!=='none'};
+  }
   function matchBox(im,box,index,options={}) {
     const clipped=box.y+box.height>=im.height-3;
     const restoreHeight=clipped&&options.cardAspect&&box.height<box.width/options.cardAspect*.95;
@@ -253,12 +306,31 @@
     const first=candidates[0],second=candidates[1],margin=(second.error-first.error)/Math.max(.01,second.error);
     const quality=clamp(1-first.error/.12,0,1);
     const confidence=clamp(quality*(.55+.45*clamp(margin/.45,0,1)),0,1);
-    return {box,id:first.error<.10?first.id:null,confidence,needsReview:confidence<.72,
+    const match={box,id:first.error<.10?first.id:null,confidence,
       candidates:candidates.map(c=>({id:c.id,score:clamp(1-c.error/.18,0,1)})),mode:first.mode,error:first.error};
+    return {...match,...classifyReview(match)};
+  }
+  function validateImage(image) {
+    if(!Number.isInteger(image?.width)||!Number.isInteger(image?.height)||image.width<1||image.height<1||image.width*image.height>32000000||image.data?.length!==image.width*image.height*4)throw new Error('图片尺寸无效或过大，请先缩小截图。');
+  }
+  function checkAbort(signal) {if(signal?.aborted)throw new DOMException('识别已取消','AbortError');}
+  async function analyzeBoxCore(image,box,index,options={}) {
+    validateImage(image);checkAbort(options.signal);
+    if(!box||!['x','y','width','height'].every(k=>Number.isFinite(box[k]))||box.width<=0||box.height<=0)throw new Error('卡牌框范围无效，请重新框选。');
+    const x=clamp(box.x,0,image.width),y=clamp(box.y,0,image.height);
+    const clipped={x,y,width:Math.min(image.width,box.x+box.width)-x,height:Math.min(image.height,box.y+box.height)-y};
+    if(clipped.width<2||clipped.height<2)throw new Error('卡牌框过小或超出图片，请重新框选。');
+    if(!Array.isArray(index?.cards)||!index.cards.length)throw new Error('本地卡牌识别图库不完整。');
+    options.onProgress?.({phase:'matching',progress:.2,message:'识别框选卡牌'});
+    checkAbort(options.signal);
+    const result=matchBox(image,clipped,prepareIndex(index));
+    checkAbort(options.signal);
+    options.onProgress?.({phase:'done',progress:1,message:'卡牌识别完成'});
+    return result;
   }
   async function analyzeCore(image,index,options={}) {
-    const progress=options.onProgress||(()=>{}); const check=()=>{if(options.signal?.aborted)throw new DOMException('识别已取消','AbortError');};
-    if(!Number.isInteger(image?.width)||!Number.isInteger(image?.height)||image.width<1||image.height<1||image.width*image.height>32000000||image.data?.length!==image.width*image.height*4)throw new Error('图片尺寸无效或过大，请先缩小截图。');
+    const progress=options.onProgress||(()=>{}); const check=()=>checkAbort(options.signal);
+    validateImage(image);
     if(!Array.isArray(index?.cards)||!index.cards.length)throw new Error('本地卡牌识别图库不完整。');
     check();progress({phase:'layout',progress:.08,message:'定位评级与卡牌'});
     index=prepareIndex(index);
@@ -268,7 +340,8 @@
     const allHeights=found.map(r=>r.y1-r.y0),typicalHeight=median(allHeights);
     heightRows=found.filter(r=>!(r.y1>=image.height-2&&r.y1-r.y0<typicalHeight*.75));
     const heights=(heightRows.length?heightRows:found).map(r=>r.y1-r.y0).sort((a,b)=>a-b),baseHeight=median(heights.filter(h=>h<heights[0]*1.3));
-    const tiers=found.map((t,i)=>({name:'评级 '+(i+1),color:'#'+t.color.map(v=>v.toString(16).padStart(2,'0')).join(''),y0:t.y0,y1:t.y1,cards:boxesForTier(image,t,baseHeight),labelBox:{x:t.x0,y:t.y0,width:t.x1-t.x0,height:t.y1-t.y0}}));
+    const frame=contentFrame(image,found,baseHeight);
+    const tiers=found.map((t,i)=>({name:'评级 '+(i+1),color:'#'+t.color.map(v=>v.toString(16).padStart(2,'0')).join(''),y0:t.y0,y1:t.y1,cards:boxesForTier(image,t,baseHeight,frame),labelBox:{x:t.x0,y:t.y0,width:t.x1-t.x0,height:t.y1-t.y0}}));
     const denseCards=splitDenseCards(image,tiers,index);
     for(const tier of tiers)for(const box of tier.cards)delete box._group;
     const allBoxes=tiers.flatMap(t=>t.cards),medianW=median(allBoxes.map(b=>b.width)),medianH=median(allBoxes.map(b=>b.height));
@@ -286,7 +359,7 @@
       const matches=[];
       for(const box of tier.cards) {
         check();const match=matchBox(image,box,index,{cardAspect});
-        if(box.y+box.height>=image.height-3&&cardAspect){match.cropped=true;match.clipped=true;match.needsReview=true;match.reviewReason='卡面被截图边缘截断，请核对';}
+        if(box.y+box.height>=image.height-3&&cardAspect){match.cropped=true;match.clipped=true;Object.assign(match,classifyReview(match));}
         // Small text/logos outside the regular card grid are not card slots.
         const smallDecoration=denseCards&&box.height<denseCards.height*.75&&match.confidence<.5&&!match.clipped;
         if(!smallDecoration&&!(box.height<medianH*.65&&match.error>.12))matches.push(match);done++;
@@ -298,24 +371,54 @@
     if(tiers.some(t=>t.cards.some(c=>c.cropped)))warnings.push('截图底部有卡面被截断，已保留并标记为待确认。');
     return {width:image.width,height:image.height,tiers,warnings};
   }
-  async function analyze(imageData,options={}) {
-    if(typeof Worker==='undefined'||options.index)return analyzeCore(imageData,options.index||await (await fetch(new URL('recognition/index.json',engineUrl||location.href))).json(),options);
-    const worker=new Worker(engineUrl);const indexUrl=new URL('recognition/index.json',engineUrl).href;
+  const indexCache=new Map();
+  async function loadIndex(url) {
+    if(!indexCache.has(url))indexCache.set(url,(async()=>{
+      const response=await fetch(url);if(!response.ok)throw new Error('本地卡牌识别图库加载失败。');
+      return prepareIndex(await response.json());
+    })().catch(error=>{indexCache.delete(url);throw error;}));
+    return indexCache.get(url);
+  }
+  let idleWorker=null,idleWorkerTimer=null;
+  function releaseWorker() {
+    clearTimeout(idleWorkerTimer);idleWorkerTimer=null;
+    idleWorker?.terminate();idleWorker=null;
+  }
+  function runWorker(type,imageData,box,options) {
+    checkAbort(options.signal);validateImage(imageData);
+    const worker=idleWorker||new Worker(engineUrl);idleWorker=null;
+    clearTimeout(idleWorkerTimer);idleWorkerTimer=null;
+    const indexUrl=new URL('recognition/index.json',engineUrl).href;
     return new Promise((resolve,reject)=>{
-      const cleanup=()=>{worker.terminate();options.signal?.removeEventListener('abort',abort);};
-      const abort=()=>{cleanup();reject(new DOMException('识别已取消','AbortError'));};
-      if(options.signal?.aborted)return abort();options.signal?.addEventListener('abort',abort,{once:true});
-      worker.onmessage=event=>{const d=event.data;if(d.type==='progress')options.onProgress?.(d.value);else{cleanup();d.type==='result'?resolve(d.value):reject(new Error(d.message));}};
-      worker.onerror=e=>{cleanup();reject(new Error(e.message||'本地识别器启动失败'));};
-      const data=new Uint8ClampedArray(imageData.data);worker.postMessage({type:'analyze',image:{width:imageData.width,height:imageData.height,data},indexUrl},[data.buffer]);
+      let finished=false;
+      const cleanup=reuse=>{
+        if(finished)return false;finished=true;
+        worker.onmessage=null;worker.onerror=null;options.signal?.removeEventListener('abort',abort);
+        if(reuse&&!idleWorker){idleWorker=worker;idleWorkerTimer=setTimeout(releaseWorker,30000);}
+        else worker.terminate();return true;
+      };
+      const abort=()=>{if(cleanup(false))reject(new DOMException('识别已取消','AbortError'));};
+      options.signal?.addEventListener('abort',abort,{once:true});
+      worker.onmessage=event=>{const d=event.data;if(d.type==='progress')options.onProgress?.(d.value);else if(cleanup(d.type==='result')){d.type==='result'?resolve(d.value):reject(new Error(d.message));}};
+      worker.onerror=e=>{if(cleanup(false))reject(new Error(e.message||'本地识别器启动失败'));};
+      try {const data=new Uint8ClampedArray(imageData.data);worker.postMessage({type,image:{width:imageData.width,height:imageData.height,data},box,indexUrl},[data.buffer]);}
+      catch(error){if(cleanup(false))reject(error);}
     });
   }
-  const api={analyze,analyzeCore,prepareIndex,_test:{labels,boxesForTier,matchBox}};
+  async function runAnalysis(type,imageData,box,options={}) {
+    checkAbort(options.signal);
+    if(typeof Worker!=='undefined'&&!options.index)return runWorker(type,imageData,box,options);
+    const index=options.index||await loadIndex(new URL('recognition/index.json',engineUrl||location.href).href);
+    return type==='analyze-box'?analyzeBoxCore(imageData,box,index,options):analyzeCore(imageData,index,options);
+  }
+  const analyze=(imageData,options={})=>runAnalysis('analyze',imageData,null,options);
+  const analyzeBox=(imageData,box,options={})=>runAnalysis('analyze-box',imageData,box,options);
+  const api={analyze,analyzeBox,analyzeCore,analyzeBoxCore,prepareIndex,classifyReview,releaseWorker,_test:{labels,boxesForTier,contentFrame,matchBox}};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
   global.SpireScreenshotEngine=api;
   if(typeof WorkerGlobalScope!=='undefined'&&global instanceof WorkerGlobalScope)global.onmessage=async event=>{
-    if(event.data.type!=='analyze')return;
-    try {const index=await(await fetch(event.data.indexUrl)).json();const value=await analyzeCore(event.data.image,index,{onProgress:value=>global.postMessage({type:'progress',value})});global.postMessage({type:'result',value});}
+    if(!['analyze','analyze-box'].includes(event.data.type))return;
+    try {const index=await loadIndex(event.data.indexUrl),options={onProgress:value=>global.postMessage({type:'progress',value})};const value=event.data.type==='analyze-box'?await analyzeBoxCore(event.data.image,event.data.box,index,options):await analyzeCore(event.data.image,index,options);global.postMessage({type:'result',value});}
     catch(error){global.postMessage({type:'error',message:error.message});}
   };
 })(typeof self!=='undefined'?self:globalThis);

@@ -209,7 +209,7 @@
     const verified=[];
     for(const box of narrow.slice(0,18)) {
       if(Math.abs(box.height/typicalH-1)>.2)continue;
-      const result=matchBox(image,box,index);
+      const result=matchLegacyBox(image,box,index);
       if(result.mode==='card'&&result.confidence>=.75)verified.push(box);
       if(verified.length>=6)break;
     }
@@ -277,9 +277,9 @@
     }
     return {reviewLevel,reviewReason,needsReview:reviewLevel!=='none'};
   }
-  function matchBox(im,box,index,options={}) {
+  function matchLegacyBox(im,box,index,options={}) {
     const clipped=box.y+box.height>=im.height-3;
-    const restoreHeight=clipped&&options.cardAspect&&box.height<box.width/options.cardAspect*.95;
+    const restoreHeight=!options.skipRefine&&clipped&&options.cardAspect&&box.height<box.width/options.cardAspect*.95;
     const nominal=restoreHeight?{...box,height:box.width/options.cardAspect}:box;
     const artSamples=[resizeCrop(im,box,32,24,0),resizeCrop(im,box,32,24,.02)];
     const face=resizeCrop(im,nominal,24,32);
@@ -298,7 +298,7 @@
     // Card frames vary in padding and low-resolution alpha thresholds can clip
     // a few header pixels. Refine only a short geometric shortlist; never use
     // the tier, neighboring IDs or a reference ranking to choose a candidate.
-    if(ratio<1.05&&candidates[0].error>.012) {
+    if(ratio<1.05&&candidates[0].error>.012&&!options.skipRefine) {
       const samples=[];
       for(const offset of [-.05,-.025,0,.025])for(const scale of [.95,1,1.05]) {
         if(offset===0&&scale===1)continue;
@@ -316,7 +316,7 @@
       }
       candidates.sort((a,b)=>a.error-b.error);
     }
-    candidates=candidates.slice(0,4);
+    candidates=candidates.slice(0,options.candidateLimit||4);
     const first=candidates[0],second=candidates[1],margin=(second.error-first.error)/Math.max(.01,second.error);
     const quality=clamp(1-first.error/.12,0,1);
     const confidence=clamp(quality*(.55+.45*clamp(margin/.45,0,1)),0,1);
@@ -330,6 +330,226 @@
     const match={box,id:first.error<.10?first.id:null,confidence,...versionMatch(first),
       candidates:candidates.map(c=>({id:c.id,score:clamp(1-c.error/.18,0,1),...versionMatch(c)})),mode:first.mode,error:first.error};
     return {...match,...classifyReview(match)};
+  }
+
+  // Search visible parts of several geometries before narrowing identities.
+  // All samples are confined to this card's observed box, even when a virtual
+  // full-card rectangle extends into a neighboring row or outside the image.
+  const shapeCache=new WeakMap();
+  function descriptorCrop(data,sw,sh,channels,w,h,rect={x:0,y:0,width:1,height:1}) {
+    const out=new Float32Array(w*h*channels);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++) {
+      const u=clamp((rect.x+(x+.5)*rect.width/w)*sw-.5,0,sw-1),v=clamp((rect.y+(y+.5)*rect.height/h)*sh-.5,0,sh-1);
+      const x0=Math.floor(u),y0=Math.floor(v),x1=Math.min(sw-1,x0+1),y1=Math.min(sh-1,y0+1),a=u-x0,b=v-y0;
+      for(let z=0;z<channels;z++)out[(y*w+x)*channels+z]=
+        data[(y0*sw+x0)*channels+z]*(1-a)*(1-b)+data[(y0*sw+x1)*channels+z]*a*(1-b)+
+        data[(y1*sw+x0)*channels+z]*(1-a)*b+data[(y1*sw+x1)*channels+z]*a*b;
+    }
+    return out;
+  }
+  function shapeIndex(index) {
+    if(shapeCache.has(index))return shapeCache.get(index);
+    const tiles=[{x:0,y:0,width:1,height:1}];
+    for(const size of [.85,.7])for(const position of [0,.5,1]) {
+      tiles.push({x:(1-size)*position,y:0,width:size,height:1});
+      tiles.push({x:0,y:(1-size)*position,width:1,height:size});
+    }
+    for(const x of [0,.5,1])for(const y of [0,.5,1])tiles.push({x:x*.3,y:y*.3,width:.7,height:.7});
+    const prepared=index.cards.map(card=>({card,
+      faces:card.faces.map((face,i)=>({face,coarse:descriptorCrop(face.rgba,24,32,4,8,12),labels:card.faceLabels?.[i]||[]})),
+      art:card.art.flatMap(ref=>tiles.map(tile=>({tile,coarse:descriptorCrop(ref,32,24,3,12,9,tile),full:descriptorCrop(ref,32,24,3,32,24,tile)})))
+    }));
+    shapeCache.set(index,prepared);return prepared;
+  }
+  function visibleSample(im,box,rect,w,h) {
+    const pixels=new Float32Array(w*h*3),mask=new Uint8Array(w*h);
+    const left=Math.max(0,box.x),right=Math.min(im.width,box.x+box.width),top=Math.max(0,box.y),bottom=Math.min(im.height,box.y+box.height);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++) {
+      const xx=rect.x+(x+.5)*rect.width/w,yy=rect.y+(y+.5)*rect.height/h,p=y*w+x;
+      if(xx<left||xx>=right||yy<top||yy>=bottom)continue;
+      mask[p]=1;
+      for(const dy of [-.22,.22])for(const dx of [-.22,.22]) {
+        const ix=clamp(Math.round(xx+dx*rect.width/w),Math.ceil(left),Math.ceil(right)-1),iy=clamp(Math.round(yy+dy*rect.height/h),Math.ceil(top),Math.ceil(bottom)-1),j=(iy*im.width+ix)*4;
+        for(let z=0;z<3;z++)pixels[p*3+z]+=im.data[j+z]/4;
+      }
+    }
+    return {pixels,mask,w,h};
+  }
+  const weightCache=new WeakMap();
+  function maskedFaceError(sample,ref) {
+    const {pixels,mask,w,h}=sample;let weights=weightCache.get(ref);
+    if(!weights) {
+      const values=new Float32Array(w*h),art=new Uint8Array(w*h);let available=0,portrait=0;
+      for(let p=0;p<w*h;p++) {
+        const x=(p%w+.5)/w,y=(Math.floor(p/w)+.5)/h;
+        art[p]=x>=.125&&x<=.875&&y>=.125&&y<=.594?1:0;
+        values[p]=ref[p*4+3]/255*(art[p]?1:.12);available+=values[p];if(art[p])portrait+=values[p];
+      }
+      weights={values,art,available,portrait};weightCache.set(ref,weights);
+    }
+    let sum=0,weight=0,visiblePortrait=0;
+    for(let p=0;p<w*h;p++) {
+      if(!mask[p])continue;
+      const wt=weights.values[p];weight+=wt;if(weights.art[p])visiblePortrait+=wt;
+      const a=p*3,b=p*4,dr=pixels[a]-ref[b],dg=pixels[a+1]-ref[b+1],db=pixels[a+2]-ref[b+2];
+      sum+=(dr*dr+dg*dg+db*db)*wt;
+    }
+    const coverage=weight/Math.max(.001,weights.available),artCoverage=visiblePortrait/Math.max(.001,weights.portrait);
+    if(coverage<.4||artCoverage<.45)return {error:Infinity,coverage};
+    return {error:sum/Math.max(.001,weight)/3/65025+.008*(1-coverage),coverage};
+  }
+  function faceGeometries(box) {
+    const rects=[],add=(sx,sy,ax,ay)=>rects.push({x:box.x-box.width*(sx-1)*ax,y:box.y-box.height*(sy-1)*ay,width:box.width*sx,height:box.height*sy});
+    add(1,1,0,0);
+    for(const sy of [1.15,1.3,1.5,1.8,2.2,2.7])for(const ay of [0,.25,.5,.75,1])add(1,sy,0,ay);
+    for(const sx of [1.18,1.4])for(const ax of [0,.5,1])for(const sy of [1,1.3,1.7])for(const ay of (sy===1?[0]:[0,.5,1]))add(sx,sy,ax,ay);
+    return rects;
+  }
+  function chromaError(a,b) {
+    const sa=Math.max(90,a[0]+a[1]+a[2]),sb=Math.max(90,b[0]+b[1]+b[2]);
+    return a.reduce((sum,v,i)=>sum+(v/sa-b[i]/sb)**2,0);
+  }
+  function frameEvidence(sample,entry,record) {
+    // Use known UI regions, not the artwork's dominant color. Basic/Common
+    // share one visual family. Ancient frames opt out of these ordinary masks.
+    if(!entry.card.color||!record.labels.length||record.labels.some(l=>l.rarity==='古老'))return {penalty:0};
+    const ref=record.face.rgba,groups=record.framePositions||{color:[],rarity:[]};
+    const rarity=record.labels[0].rarity,family=['普通','基础'].includes(rarity)?'普通/基础':rarity;
+    const target=family==='稀有'?[240,185,55]:family==='罕见'?[100,210,210]:[160,160,160];
+    if(!record.framePositions) {
+      for(let y=21;y<=28;y+=2)for(const x of [2,21])groups.color.push(y*24+x);
+      for(let y=2;y<=16;y++)for(let x=2;x<=21;x++) {
+        if(!(y<=3&&x>=6&&x<=17)&&!([3,20].includes(x)&&y>=7&&y<=13))continue;
+        const rgb=Array.from(ref.slice((y*24+x)*4,(y*24+x)*4+3));
+        if(chromaError(rgb,target)<.012&&Math.max(...rgb)>90)groups.rarity.push(y*24+x);
+      }
+      record.framePositions=groups;
+    }
+    const result={penalty:0};
+    for(const [key,positions] of Object.entries(groups)) {
+      const errors=positions.filter(p=>sample.mask[p]&&ref[p*4+3]>220).map(p=>chromaError(Array.from(sample.pixels.slice(p*3,p*3+3)),Array.from(ref.slice(p*4,p*4+3)))).sort((a,b)=>a-b);
+      if(errors.length<4)continue;
+      const error=errors[Math.floor(errors.length*.6)];
+      result[key]={label:key==='color'?entry.card.color:family,support:errors.length,error};
+      // Bounded soft penalty: even an incorrect color estimate cannot remove
+      // an identity from the unrestricted geometry/artwork candidate paths.
+      result.penalty+=.004*Math.min(1,error/.055);
+    }
+    return result;
+  }
+  function matchBox(im,box,index,options={}) {
+    const legacy=matchLegacyBox(im,box,index,{...options,skipRefine:true,candidateLimit:16});
+    // Strong, well-separated standard faces/art keep the inexpensive path.
+    if(legacy.error<.025&&legacy.confidence>.8)return {...legacy,candidates:legacy.candidates.slice(0,4),recognitionPath:'standard'};
+    const entries=shapeIndex(index),standardIds=new Set(legacy.candidates.map(c=>c.id));
+    const rankFaces=rects=>{
+      const samples=rects.map(rect=>visibleSample(im,box,rect,8,12));
+      return entries.map(entry=>{
+        let best={error:Infinity};
+        for(const record of entry.faces)for(let i=0;i<samples.length;i++) {
+          const score=maskedFaceError(samples[i],record.coarse);
+          if(score.error<best.error)best={...score,rect:rects[i]};
+        }
+        return {...best,entry};
+      }).sort((a,b)=>a.error-b.error);
+    };
+    const candidates=new Map(),add=c=>{const previous=candidates.get(c.id);if(!previous||c.error<previous.error)candidates.set(c.id,c);};
+    legacy.candidates.forEach((c,i)=>add({...c,error:i===0?legacy.error:(1-c.score)*.18,mode:legacy.mode,path:'standard',coverage:1}));
+    let intactEvidence=false,expanded=false,faceRefinements=0;
+    // A whole-frame interpretation supported by both frame regions can softly
+    // disfavor extreme partial fits. Aspect ratio alone is never evidence.
+    const partialPenalty=coverage=>partialFitPenalty(coverage,intactEvidence);
+    const refineFace=candidate=>{
+      const {entry}=candidate;if(!Number.isFinite(candidate.error))return;
+      faceRefinements++;
+      let best={error:Infinity};
+      const evaluate=r=>{
+        const sample=visibleSample(im,box,r,24,32);
+        for(const record of entry.faces) {
+          const score=maskedFaceError(sample,record.face.rgba);
+          if(score.error+.002>=best.error)continue;
+          const frame=frameEvidence(sample,entry,record);
+          const error=score.error+frame.penalty+.002+partialPenalty(score.coverage);
+          if(error<best.error)best={error,coverage:score.coverage,record,rect:r,frame};
+        }
+      };
+      evaluate(candidate.rect);
+      if(!best.rect)return;
+      // Coordinate descent refines position AND scale after broad retrieval.
+      for(const axis of ['y','x','y']) {
+        const origin={...best.rect},size=axis==='x'?'width':'height';
+        for(const shift of [-.045,-.0225,0,.0225,.045])for(const scale of [.95,1,1.05])evaluate({...origin,[axis]:origin[axis]+origin[size]*shift,[size]:origin[size]*scale});
+      }
+      const versionErrors=new Map();
+      const sample=visibleSample(im,box,best.rect,24,32);
+      for(const record of entry.faces) {
+        const score=maskedFaceError(sample,record.face.rgba),error=score.error+frameEvidence(sample,entry,record).penalty+.002+partialPenalty(score.coverage);
+        for(const v of record.face.versions||[])versionErrors.set(v,Math.min(versionErrors.get(v)??Infinity,error));
+      }
+      const versions=[...versionErrors].sort((a,b)=>a[1]-b[1]);
+      add({id:entry.card.id,error:best.error,mode:'card',path:'visible-card',coverage:best.coverage,frame:best.frame,geometry:best.rect,
+        sourceVersions:versions.filter(v=>v[1]-versions[0][1]<1e-9).map(v=>v[0]),possibleVersions:versions.filter(v=>v[1]-versions[0][1]<.003).map(v=>v[0])});
+    };
+    const result=()=>{
+      const ranked=[...candidates.values()].sort((a,b)=>a.error-b.error).slice(0,4),first=ranked[0],second=ranked[1];
+      const margin=second?(second.error-first.error)/Math.max(.01,second.error):0;
+      const confidence=clamp((1-first.error/.12)*(.55+.45*clamp(margin/.45,0,1))*Math.min(1,.75+first.coverage*.3),0,1);
+      const match={box,id:first.error<.10?first.id:null,error:first.error,confidence,mode:first.mode,recognitionPath:first.path,
+        visibleCoverage:first.coverage,frameEvidence:first.frame,geometry:first.geometry,
+        searchExpanded:expanded,faceRefinements,intactEvidence,
+        sourceVersions:first.sourceVersions,possibleVersions:first.possibleVersions,
+        candidates:ranked.map(c=>({id:c.id,score:clamp(1-c.error/.18,0,1),sourceVersions:c.sourceVersions,possibleVersions:c.possibleVersions}))};
+      return {...match,...classifyReview(match)};
+    };
+    // Give ordinary screenshots small alignment corrections BEFORE pruning.
+    // Keep independent standard candidates even if partial fits crowd them out.
+    const alignedRanks=rankFaces(alignedGeometries(box));
+    for(const candidate of selectFaceCandidates(alignedRanks,standardIds))refineFace(candidate);
+    const aligned=result();
+    intactEvidence=!!(aligned.error<.03&&aligned.visibleCoverage>.94&&
+      aligned.frameEvidence?.color?.support>=4&&aligned.frameEvidence?.rarity?.support>=4);
+    if(aligned.error<.025&&aligned.confidence>.8&&aligned.visibleCoverage>.94)return {...aligned,intactEvidence};
+    const faceRanks=rankFaces(faceGeometries(box)),artSample=resizeCrop(im,box,12,9);
+    const artRanks=entries.map(entry=>({entry,error:Math.min(...entry.art.map(patch=>artError(artSample,patch.coarse)+.006*(1-patch.tile.width*patch.tile.height)))})).sort((a,b)=>a.error-b.error);
+    const initialFaces=selectFaceCandidates(faceRanks,standardIds),refinedIds=new Set(initialFaces.map(c=>c.entry.card.id));
+    for(const candidate of initialFaces)refineFace(candidate);
+    const artFull=resizeCrop(im,box,32,24);
+    const refineArt=({entry})=>{
+      let error=Infinity,bestPatch;
+      for(const patch of entry.art) {
+        const e=artError(artFull,patch.full)+.006*(1-patch.tile.width*patch.tile.height)+.004;
+        if(e<error){error=e;bestPatch=patch;}
+      }
+      add({id:entry.card.id,error,mode:'art',path:'artwork',coverage:bestPatch.tile.width*bestPatch.tile.height,sourceVersions:entry.card.versions||[],possibleVersions:entry.card.versions||[]});
+    };
+    artRanks.slice(0,24).forEach(refineArt);
+    if(needsExpandedSearch(result())) {
+      expanded=true;
+      // Include both whole-card and partial rankings; never constrain the
+      // identity by neighboring cards or force duplicate IDs to be different.
+      const alignedInitial=new Set(selectFaceCandidates(alignedRanks,standardIds).map(c=>c.entry.card.id));
+      for(const candidate of alignedRanks.slice(0,96))if(!alignedInitial.has(candidate.entry.card.id))refineFace(candidate);
+      for(const candidate of faceRanks.slice(0,96))if(!refinedIds.has(candidate.entry.card.id))refineFace(candidate);
+      artRanks.slice(24,96).forEach(refineArt);
+    }
+    return result();
+  }
+  function alignedGeometries(box) {
+    const rects=[];
+    for(const sy of [.9,.95,1,1.05])for(const dx of [-.04,0,.04])for(const dy of [-.04,0,.04])
+      rects.push({x:box.x+dx*box.width,y:box.y+dy*box.height,width:box.width,height:box.height*sy});
+    return rects;
+  }
+  function selectFaceCandidates(ranks,standardIds) {
+    return ranks.filter((c,i)=>i<24||standardIds.has(c.entry.card.id));
+  }
+  function needsExpandedSearch(match) {
+    return !match.id||match.confidence<.65||
+      (match.candidates.length>1&&match.candidates[0].score-match.candidates[1].score<.03)||
+      (match.intactEvidence&&match.visibleCoverage<.65);
+  }
+  function partialFitPenalty(coverage,intactEvidence) {
+    return intactEvidence ? .012*Math.max(0,.9-coverage) : 0;
   }
   function validateImage(image) {
     if(!Number.isInteger(image?.width)||!Number.isInteger(image?.height)||image.width<1||image.height<1||image.width*image.height>32000000||image.data?.length!==image.width*image.height*4)throw new Error('图片尺寸无效或过大，请先缩小截图。');
@@ -392,7 +612,10 @@
         if(box.y+box.height>=image.height-3&&cardAspect){match.cropped=true;match.clipped=true;Object.assign(match,classifyReview(match));}
         // Small text/logos outside the regular card grid are not card slots.
         const smallDecoration=denseCards&&box.height<denseCards.height*.75&&match.confidence<.5&&!match.clipped;
-        if(!smallDecoration&&!(box.height<medianH*.65&&match.error>.12))matches.push(match);done++;
+        // A flexible partial match must not turn a tiny decorative fragment
+        // into a new slot. Keep the established strict test for these boxes.
+        const smallNonCard=box.height<medianH*.65&&matchLegacyBox(image,box,index,{cardAspect}).error>.12;
+        if(!smallDecoration&&!smallNonCard)matches.push(match);done++;
         if(done%3===0){progress({phase:'matching',progress:.15+.8*done/Math.max(1,total),message:`匹配卡牌 ${done} / ${total}`});await new Promise(resolve=>setTimeout(resolve,0));}
       }
       tier.cards=matches;
@@ -444,7 +667,7 @@
   }
   const analyze=(imageData,options={})=>runAnalysis('analyze',imageData,null,options);
   const analyzeBox=(imageData,box,options={})=>runAnalysis('analyze-box',imageData,box,options);
-  const api={analyze,analyzeBox,analyzeCore,analyzeBoxCore,prepareIndex,classifyReview,releaseWorker,_test:{labels,boxesForTier,contentFrame,matchBox}};
+  const api={analyze,analyzeBox,analyzeCore,analyzeBoxCore,prepareIndex,classifyReview,releaseWorker,_test:{labels,boxesForTier,contentFrame,matchBox,visibleSample,frameEvidence,selectFaceCandidates,needsExpandedSearch,partialFitPenalty}};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
   global.SpireScreenshotEngine=api;
   if(typeof WorkerGlobalScope!=='undefined'&&global instanceof WorkerGlobalScope)global.onmessage=async event=>{

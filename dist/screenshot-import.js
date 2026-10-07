@@ -71,7 +71,7 @@
     let tierLayout = null, pendingLayout = null, originalImage = null;
     let batchKind = null, batchReturnFocus = null, nameEditorKey = null;
     let importVersion = null;
-    const cardLabel = card => card ? card.name + (versionCatalog ? ` · ${card.gameVersion}${card.gameVersion === importVersion ? '（当前）' : ''}` : '') : '未识别';
+    const cardLabel = card => card ? card.name + (versionCatalog && card.gameVersion !== importVersion ? ` · ${card.gameVersion}` : '') : '未识别';
     function reviewMatch(match) {
       const confidence = Number.isFinite(match.confidence) ? match.confidence : 0;
       const review = root.SpireScreenshotEngine.classifyReview?.({...match, confidence}) || {reviewLevel: match.reviewLevel || (match.needsReview || confidence < .72 ? 'severe' : 'none'), reviewReason: match.reviewReason || ''};
@@ -202,7 +202,13 @@
     const candidateGrid = el('div', 'ssi-candidates'); candidateGrid.setAttribute('aria-label', '完整卡库');
     const catalogPanel = el('section', 'ssi-catalog-panel'); catalogPanel.setAttribute('aria-labelledby', 'ssi-catalog-prompt');
     const catalogPrompt = el('h3', 'ssi-catalog-prompt'); catalogPrompt.id = 'ssi-catalog-prompt';
-    catalogPanel.append(catalogPrompt, search, filterBar, candidateHeading, candidateGrid);
+    const catalogHeading = el('div', 'ssi-catalog-heading');
+    const versionLabel = el('label', 'ssi-catalog-version'); versionLabel.hidden = !versionCatalog;
+    const versionFilter = el('select'); versionFilter.setAttribute('aria-label', '校对卡库版本');
+    for (const version of versionCatalog?.versions || []) { const option = el('option', '', version.label || version.id); option.value = version.id; versionFilter.append(option); }
+    versionFilter.addEventListener('change', () => { renderCandidates(); candidateGrid.scrollTop = 0; });
+    versionLabel.append(el('span', '', '版本'), versionFilter); catalogHeading.append(catalogPrompt, versionLabel);
+    catalogPanel.append(catalogHeading, search, filterBar, candidateHeading, candidateGrid);
     editor.append(editHeader, editTop, catalogPanel, editorFooter);
     const batchDialog = el('dialog', 'ssi-batch-dialog'); batchDialog.setAttribute('aria-labelledby', 'ssi-batch-heading');
     const batchHeader = el('header', 'ssi-header');
@@ -527,6 +533,7 @@
       const found = findItem(key); if (!found) return;
       selected = key; editorTarget = key;
       editorSession = {key, isNew, tierKey: found.tier.key, draft: {...found.item, candidates: [...(found.item.candidates || [])]}, touched: false, matching: false, message: '', controller: null};
+      versionFilter.value = byId.get(found.item.id)?.gameVersion || importVersion || '';
       search.value = ''; setupFilters(); renderTiers(); renderEditor();
       if (!editor.open) editor.showModal();
       if (isNew && found.item.box) recognizeDraft(editorSession);
@@ -600,7 +607,7 @@
     function renderCandidates() {
       const session = editorSession; if (!session) return;
       const query = search.value.trim().toLowerCase();
-      const list = catalog.filter(card => (!query || `${card.name} ${card.english} ${card.id}`.toLowerCase().includes(query)) && (!colorFilter.value || card.color === colorFilter.value) && (!rarityFilter.value || card.rarity === rarityFilter.value) && (!typeFilter.value || card.type === typeFilter.value) && (!costFilter.value || String(card.cost) === costFilter.value));
+      const list = catalog.filter(card => (!versionCatalog || card.gameVersion === versionFilter.value) && (!query || `${card.name} ${card.english} ${card.id}`.toLowerCase().includes(query)) && (!colorFilter.value || card.color === colorFilter.value) && (!rarityFilter.value || card.rarity === rarityFilter.value) && (!typeFilter.value || card.type === typeFilter.value) && (!costFilter.value || String(card.cost) === costFilter.value));
       candidateHeading.textContent = `完整卡库 · ${list.length} 张卡牌 · 选择后点击「确认」`;
       clearFilters.disabled = !(query || colorFilter.value || rarityFilter.value || typeFilter.value || costFilter.value);
       candidateGrid.replaceChildren();
@@ -986,7 +993,13 @@
         if (previous) for (const tier of tiers) for (const item of tier.cards) {
           const chosen = byId.get(item.id);
           const raw = item.reviewAcknowledged && chosen ? {id: chosen.baseId, sourceVersions: [chosen.gameVersion], possibleVersions: [chosen.gameVersion], confidence: item.confidence} : item.rawMatch;
-          if (raw) Object.assign(item, reviewMatch(raw), {box: item.box, reviewAcknowledged: false});
+          if (raw) {
+            const explicit = item.reviewAcknowledged && chosen;
+            Object.assign(item, reviewMatch(raw), {box: item.box, reviewAcknowledged: false});
+            // A confirmed choice is intentional, including a manually selected
+            // older version. Changing the board must not silently replace it.
+            if (explicit) Object.assign(item, {id: chosen.id, confirmed: true, reviewAcknowledged: true, reviewLevel: 'none', reviewReason: '', needsReview: false, versionConflict: false, versionAmbiguous: false});
+          }
         }
         return;
       }

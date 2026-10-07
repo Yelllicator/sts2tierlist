@@ -72,6 +72,7 @@
 .ssi-editor .ssi-candidates{grid-template-columns:repeat(auto-fill,minmax(90px,1fr));max-height:30dvh;min-height:0;flex:1}.ssi-editor .ssi-candidate-heading{color:var(--text)}
 .ssi-catalog-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;margin:14px 22px;padding:14px;border:1px solid var(--gold);border-radius:7px;background:var(--bg);gap:10px;overflow:auto;overscroll-behavior:contain}
 .ssi-catalog-prompt{margin:0;font-size:14px;font-weight:600;line-height:1.5;color:var(--gold);flex:none}
+.ssi-catalog-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;flex:none}.ssi-catalog-version{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;color:var(--muted)}.ssi-catalog-version[hidden]{display:none}.ssi-catalog-version select{max-width:100%;min-width:130px}
 .ssi-editor .ssi-catalog-panel .ssi-card-search{margin:0;width:100%}
 .ssi-catalog-panel .ssi-card-filters{padding:0}
 .ssi-editor .ssi-catalog-panel .ssi-candidate-heading{margin:0}

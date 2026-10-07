@@ -61,28 +61,21 @@
       const valid=(id,list)=>[...new Set(list||[])].filter(version=>catalogs.get(version)?.byId.has(id));
       const ordered=list=>list.slice().sort((a,b)=>(b===currentVersion)-(a===currentVersion)||b.localeCompare(a,'en',{numeric:true}));
       const sources=candidate=>ordered(valid(candidate.id,candidate.sourceVersions?.length?candidate.sourceVersions:available(candidate.id)));
-      const sourceVersions=sources(match),sourceVersion=sourceVersions[0];
-      if(!sourceVersion)return {...match,id:null,candidates:(match.candidates||[]).flatMap(candidate=>sources(candidate).slice(0,1).map(version=>({id:cardRef(candidate.id,version),score:candidate.score})))};
-      const source=get(sourceVersion).byId.get(match.id),currentCard=current.byId.get(match.id);
+      // Recognition chooses an identity; the board chooses its rule version.
+      // Pixel-level version winners remain evidence, not automatic overrides.
+      const preferred=candidate=>current.byId.has(candidate.id)?currentVersion:sources(candidate)[0];
+      const sourceVersions=sources(match),sourceVersion=sourceVersions[0],version=preferred(match);
       const possibleVersions=valid(match.id,match.possibleVersions?.length?match.possibleVersions:sourceVersions);
-      const versionConflict=!sameDefinition(source,currentCard);
-      const versionAmbiguous=possibleVersions.some(version=>!sameDefinition(source,get(version).byId.get(match.id)));
-      const id=cardRef(match.id,sourceVersion),candidates=[],seen=new Set();
-      const add=(baseId,version,score)=>{
-        const ref=cardRef(baseId,version);if(seen.has(ref))return;
-        seen.add(ref);candidates.push({id:ref,score});
+      const candidates=[],seen=new Set();
+      const add=candidate=>{
+        const chosen=preferred(candidate);if(!chosen||seen.has(candidate.id))return;
+        seen.add(candidate.id);candidates.push({id:cardRef(candidate.id,chosen),score:candidate.score});
       };
-      add(match.id,sourceVersion,match.candidates?.[0]?.score);
-      // Always reserve a recommendation for the selected page version, even when
-      // its face was not among the image matcher's top four identities.
-      if(currentCard)add(match.id,currentVersion,match.candidates?.find(c=>c.id===match.id)?.score);
-      for(const version of ordered(possibleVersions))add(match.id,version,match.candidates?.find(c=>c.id===match.id)?.score);
-      for(const candidate of match.candidates||[])for(const version of sources(candidate).slice(0,1))add(candidate.id,version,candidate.score);
-      const reviewReason=versionConflict
-        ? (currentCard ? `原图匹配 ${sourceVersion}，与当前 ${currentVersion} 的卡牌不同` : `原图匹配 ${sourceVersion}，当前 ${currentVersion} 未收录此卡`)
-        : versionAmbiguous ? '卡面无法可靠区分存在差异的版本，请选择卡牌版本' : match.reviewReason;
-      return {...match,id,candidates:candidates.slice(0,8),sourceVersion,sourceVersions,possibleVersions,versionConflict,versionAmbiguous,
-        ...(versionConflict||versionAmbiguous?{reviewLevel:'critical',reviewReason,needsReview:true}: {})};
+      if(version)add({...match,score:match.candidates?.find(c=>c.id===match.id)?.score});
+      for(const candidate of match.candidates||[])add(candidate);
+      const versionConflict=!!version&&!current.byId.has(match.id);
+      return {...match,id:version?cardRef(match.id,version):null,candidates:candidates.slice(0,8),sourceVersion,sourceVersions,possibleVersions,versionConflict,versionAmbiguous:false,
+        ...(versionConflict?{reviewLevel:'critical',reviewReason:`当前 ${currentVersion} 未收录此卡，已保留 ${version} 版本，请核对`,needsReview:true}: {})};
     }
     function screenshotCards(currentVersion){
       get(currentVersion);

@@ -19,6 +19,7 @@ const runtimeFiles = new Set([
   'app.js', 'cards.js', 'card-versions.js', 'versions.js', 'model.js', 'pool-sort.js', 'export.js',
   'scheme-store.js', 'scheme-library.js', 'screenshot-engine.js', 'screenshot-import.js', 'screenshot-ocr.js',
   'index.html', 'favicon.svg', 'style.css', 'scheme-library.css', 'screenshot-import.css',
+  'relics.html', 'relics.js', 'relic-model.js', 'relics-data.js', 'relic-export.js', 'relics.css', 'site-nav.css',
   'images/thumbs/manifest.json', 'recognition/index.json', 'recognition/README.txt',
   'vendor/ocr/local-worker.js', 'vendor/ocr/manifest.json', 'vendor/ocr/README.md'
 ]);
@@ -68,11 +69,15 @@ function checkReference(value, source = 'index.html', allowDirectory = false) {
   return relative;
 }
 
-const html = read('index.html');
-assert.ok(!/<base\b/i.test(html), 'Project pages must not override relative URL resolution with <base>');
-for (const match of html.matchAll(/\b(?:src|href)\s*=\s*["']([^"']*)["']/gi)) {
-  if (!match[1] || match[1].startsWith('#') || /^(?:https?:|mailto:|data:)/i.test(match[1])) continue;
-  checkReference(match[1], 'index.html', true);
+checkReference('index.html');
+for (const file of files.keys()) {
+  if (!file.endsWith('.html')) continue;
+  const html = read(file);
+  assert.ok(!/<base\b/i.test(html), `Project pages must not override relative URL resolution with <base>: ${file}`);
+  for (const match of html.matchAll(/\b(?:src|href)\s*=\s*["']([^"']*)["']/gi)) {
+    if (!match[1] || match[1].startsWith('#') || /^(?:https?:|mailto:|data:)/i.test(match[1])) continue;
+    checkReference(match[1], file, true);
+  }
 }
 for (const file of files.keys()) {
   if (!file.endsWith('.css')) continue;
@@ -120,6 +125,24 @@ for (const cards of catalogs) {
   }
 }
 
+// Relic assets are allowed only when the fixed catalog names that exact path.
+// A matching extension or directory alone must not admit private extra images.
+const relicImages = new Set();
+if (files.has('relics.html') || files.has('relics-data.js')) {
+  checkReference('relics.html');
+  checkReference('relics-data.js', 'relics.html');
+  vm.runInNewContext(read('relics-data.js'), scope, {filename: 'relics-data.js', timeout: 10000});
+  const relics = scope.window.RELICS_DATA?.relics;
+  assert.ok(Array.isArray(relics) && relics.length > 0, 'Missing fixed relic catalog');
+  const ids = new Set();
+  for (const relic of relics) {
+    assert.ok(typeof relic.id === 'string' && /^[A-Z][A-Z0-9_]*$/.test(relic.id) && !ids.has(relic.id), 'Invalid or duplicate relic ID');
+    ids.add(relic.id);
+    assert.equal(relic.image, `assets/relics/${relic.id.toLowerCase()}.webp`, `Unexpected relic image path: ${relic.id}`);
+    relicImages.add(checkReference(relic.image, 'relics-data.js'));
+  }
+}
+
 // Dynamic worker dependencies do not appear as HTML tags or card URLs.
 checkReference('recognition/index.json', 'screenshot-engine.js');
 checkReference('vendor/ocr/local-worker.js', 'screenshot-ocr.js');
@@ -137,6 +160,7 @@ if (publishedCopy) {
   const versionIds = new Map(scope.window.CARD_VERSIONS.map(version => [version.id, new Set(version.cards.map(card => card.id))]));
   for (const file of files.keys()) {
     if (runtimeFiles.has(file)) continue;
+    if (relicImages.has(file)) continue;
     const legacy = /^images\/(?:(?:ancient-v6\/)?(?:thumbs\/)?(?:zh|en)\/)?([a-z0-9-]+)\.webp$/.exec(file);
     if (legacy && legacyIds.has(legacy[1])) continue;
     const versioned = /^assets\/cards\/versions\/v([\d.]+)\/(?:thumbs\/)?(?:zh|en)\/([a-z0-9-]+)\.webp$/.exec(file);
@@ -172,6 +196,6 @@ if (publicRepository) {
 }
 
 console.log(`Pages preflight passed: ${files.size} files, ${(total / 1024 ** 2).toFixed(1)} MiB (${total} bytes).`);
-console.log(`Checked ${references} relative references under /sts2tierlist/, including ${cardImages} card image paths and ${manifest.files.length} pinned OCR files.`);
+console.log(`Checked ${references} relative references under /sts2tierlist/, including ${cardImages} card image paths, ${relicImages.size} relic images and ${manifest.files.length} pinned OCR files.`);
 console.log(publishedCopy ? 'Public copy contains no reference rankings or local artwork paths; default and legacy-import checks passed.' : 'Source check only: private metadata is allowed here and must be removed from any publishing copy.');
 console.log('Browser interaction and live GitHub hosting require separate acceptance.');

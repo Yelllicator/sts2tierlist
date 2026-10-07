@@ -1,0 +1,5 @@
+.site-nav{display:flex;align-items:center;gap:6px;font-size:14px;white-space:nowrap}
+.site-nav a{padding:9px 14px;border:1px solid transparent;border-radius:5px;color:var(--muted)}
+.site-nav a:hover{color:var(--text);text-decoration:none;border-color:var(--line)}
+.site-nav a[aria-current=page]{background:var(--panel);border-color:var(--gold);color:var(--gold)}
+@media(max-width:600px){.site-nav{margin-left:auto;font-size:13px}.site-nav a{padding:8px 9px}}

@@ -497,7 +497,7 @@
   });
   $('export-json').onclick=()=>schemeLibrary.openSave();
   $('import-json').onclick=()=>schemeLibrary.openLoad();
-  screenshotImporter=window.SpireScreenshotImporter.create({cards:versions.getAllCards(),getCards:()=>versions.getCards(state.gameVersion),getLanguage:()=>state.language,onApply:draft=>{
+  screenshotImporter=window.SpireScreenshotImporter.create({cards:versions.getAllCards(),getCards:()=>versions.getCards(state.gameVersion),getLanguage:()=>state.language,versionCatalog:versions,getGameVersion:()=>state.gameVersion,onApply:draft=>{
     const target=model.setGameVersion(state.templateId==='custom'?state:(workspace.boards.custom||model.createTemplate('custom',state.language,state.gameVersion)),state.gameVersion);
     const incoming=model.fromScreenshot(target,draft);
     if(state.templateId!=='custom')switchTemplate('custom');

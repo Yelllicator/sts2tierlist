@@ -286,9 +286,14 @@
     const ratio=nominal.width/nominal.height,visible=clamp((im.height-nominal.y)/nominal.height,0,1);
     let candidates=index.cards.map(card=>{
       let error=Infinity,mode='art';
+      const versionErrors=new Map();
       if(ratio>.90)for(const sample of artSamples)for(const ref of card.art)error=Math.min(error,artError(sample,ref));
-      if(ratio<1.05)for(const f of card.faces){const e=faceError(face,f.rgba,visible);if(e<error){error=e;mode='card';}}
-      return {id:card.id,error,mode,card};
+      if(ratio<1.05)for(const f of card.faces){
+        const e=faceError(face,f.rgba,visible);
+        for(const version of f.versions||[])versionErrors.set(version,Math.min(versionErrors.get(version)??Infinity,e));
+        if(e<error){error=e;mode='card';}
+      }
+      return {id:card.id,error,mode,card,versionErrors};
     }).sort((a,b)=>a.error-b.error);
     // Card frames vary in padding and low-resolution alpha thresholds can clip
     // a few header pixels. Refine only a short geometric shortlist; never use
@@ -306,6 +311,7 @@
       }
       for(const candidate of candidates.slice(0,16))for(const sample of samples)for(const f of candidate.card.faces) {
         const e=faceError(sample.pixels,f.rgba,sample.visible)+sample.penalty;
+        for(const version of f.versions||[])candidate.versionErrors.set(version,Math.min(candidate.versionErrors.get(version)??Infinity,e));
         if(e<candidate.error){candidate.error=e;candidate.mode='card';}
       }
       candidates.sort((a,b)=>a.error-b.error);
@@ -314,8 +320,15 @@
     const first=candidates[0],second=candidates[1],margin=(second.error-first.error)/Math.max(.01,second.error);
     const quality=clamp(1-first.error/.12,0,1);
     const confidence=clamp(quality*(.55+.45*clamp(margin/.45,0,1)),0,1);
-    const match={box,id:first.error<.10?first.id:null,confidence,
-      candidates:candidates.map(c=>({id:c.id,score:clamp(1-c.error/.18,0,1)})),mode:first.mode,error:first.error};
+    const versionMatch=c=>{
+      if(c.mode==='art')return {sourceVersions:c.card.versions||[],possibleVersions:c.card.versions||[]};
+      const ranked=[...c.versionErrors].sort((a,b)=>a[1]-b[1]);
+      // Keep exact ties, and expose close version alternatives instead of claiming certainty.
+      return {sourceVersions:ranked.filter(v=>v[1]-ranked[0][1]<1e-9).map(v=>v[0]),
+        possibleVersions:ranked.filter(v=>v[1]-ranked[0][1]<.003).map(v=>v[0])};
+    };
+    const match={box,id:first.error<.10?first.id:null,confidence,...versionMatch(first),
+      candidates:candidates.map(c=>({id:c.id,score:clamp(1-c.error/.18,0,1),...versionMatch(c)})),mode:first.mode,error:first.error};
     return {...match,...classifyReview(match)};
   }
   function validateImage(image) {

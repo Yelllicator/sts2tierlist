@@ -14,6 +14,12 @@
 
 原画、卡框、游戏文本及衍生内容版权归 Mega Crit 等原权利人。上游代码许可证不覆盖游戏资产，本说明不授予游戏资产再分发许可。
 
+## 遗物
+
+遗物双语规则固定到上述 Spire Codex 提交的 data-beta/v0.111.0/{zhs,eng}/relics.json，共 298 件。图标使用来源记录 image_url 所指的 Spire Codex WebP 主图，下载字节独立固定；运行时均为本站本地资源，不热链。规则 Git 提交号不代表图片版本。
+
+上游项目使用 [PolyForm Noncommercial 1.0.0 许可证](https://github.com/ptrlrd/spire-codex/blob/929b88c04c41dc63563d9eb41d1b4981c1b2f033/LICENSE.md)。遗物名称、规则文本和图像属于 Mega Crit；上游源码许可不构成游戏素材的独立再分发授权。
+
 ## OCR
 
 OCR 使用固定 Tesseract.js 7.0.0、Tesseract.js-core 7.0.0，以及 eng / chi_sim 1.0.0 语言数据。

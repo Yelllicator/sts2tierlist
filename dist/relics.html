@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1c1913">
+  <meta name="description" content="尖塔排表 · 杀戮尖塔2遗物 Tier List。拖动评级、筛选遗物、本地保存与图片导出。">
+  <title>尖塔排表 · 遗物排行</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="site-nav.css"><link rel="stylesheet" href="relics.css">
+</head>
+<body class="relic-page">
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark">Ⅱ</span><span>尖塔排表<small>SLAY THE SPIRE 2</small></span></a>
+    <nav class="site-nav" aria-label="排表类型"><a href="./">卡牌</a><a href="relics.html" aria-current="page">遗物</a></nav>
+    <span class="relic-version" id="relic-version"></span>
+  </header>
+  <main>
+    <section class="heading">
+      <div class="heading-title"><p class="eyebrow">RELIC TIER LIST</p><div class="title-line"><h1 id="board-title">遗物排行</h1><button id="edit-title" class="quiet" aria-label="修改标题">✎</button></div><p class="relic-intro">把每次冒险的关键，放进你的评级。</p></div>
+      <div class="heading-actions"><div class="export-controls"><label><span class="sr-only">导出清晰度</span><select id="export-resolution" aria-label="导出清晰度"><option value="2">高清 · 3000 px</option><option value="1.5">标准 · 2250 px</option><option value="1">轻量 · 1500 px</option></select></label><button id="export-png" class="primary">↓ 导出 PNG</button></div></div>
+    </section>
+    <div class="toolbar">
+      <div class="toolbar-group"><button id="undo" aria-label="撤销" title="撤销 (Ctrl+Z)">↶</button><button id="redo" aria-label="重做" title="重做 (Ctrl+Shift+Z)">↷</button><span class="separator"></span><button id="add-tier">＋ 新增评级</button><button id="auto-colors">自动配色</button></div>
+      <div class="toolbar-group"><button id="export-json">↓ 导出 JSON</button><button id="import-json">导入 JSON</button><input type="file" id="import-file" accept=".json,application/json" hidden></div>
+    </div>
+    <div class="board-note"><span id="board-count"></span><span>拖动遗物排序 · 点击遗物选择评级 · 点击档名编辑</span></div>
+    <p id="storage-warning" class="storage-warning" role="alert" hidden></p>
+    <section id="tier-board" aria-label="遗物排行表"></section>
+    <section class="pool-section">
+      <div class="pool-heading"><h2>待排遗物 <span id="pool-count"></span></h2><button id="manage-pool">＋ 选择遗物</button></div>
+      <div class="relic-filters" id="pool-filters">
+        <label>角色 <select id="filter-character" aria-label="筛选遗物角色"></select></label>
+        <label>类别 <select id="filter-rarity" aria-label="筛选遗物类别"></select></label>
+        <label>排序 <select id="pool-sort" aria-label="待排遗物排序"><option value="manual">手动顺序</option><option value="rarity">类别</option><option value="name">名称</option></select></label>
+        <label class="relic-search">名称 <input id="search" type="search" placeholder="搜索中文名 / 英文名" aria-label="搜索待排遗物"></label>
+        <button id="reset-filters" class="quiet">重置筛选</button>
+      </div>
+      <div id="pool" class="card-zone pool" data-tier="pool" aria-label="待排遗物"></div>
+    </section>
+    <footer><span id="save-status">遗物工作区独立保存在本浏览器；跨设备请导出 JSON。</span><span>游戏图文 © Mega Crit · <a id="source-link" target="_blank" rel="noopener noreferrer">固定资料来源</a></span></footer>
+  </main>
+  <dialog id="relic-dialog" aria-labelledby="detail-name">
+    <div class="relic-dialog-heading"><p class="eyebrow" id="detail-meta"></p><button data-close="relic-dialog" aria-label="关闭遗物详情" autofocus>×</button></div>
+    <div class="relic-detail"><img id="detail-image" alt=""><div><h2 id="detail-name"></h2><p id="detail-english"></p></div></div>
+    <p id="detail-description"></p><div class="move-label">移至评级</div><div id="move-actions"></div><button id="move-pool" class="full-width">移回待排区</button><button id="remove-relic" class="full-width danger">从待排移除</button>
+  </dialog>
+  <dialog id="title-dialog" class="edit-dialog" aria-labelledby="title-dialog-heading"><form id="title-form"><h2 id="title-dialog-heading">修改排表标题</h2><label for="title-input">标题</label><input id="title-input" maxlength="80" required><p id="title-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" data-close="title-dialog">取消</button><button class="primary" type="submit">保存标题</button></div></form></dialog>
+  <dialog id="tier-dialog" class="edit-dialog" aria-labelledby="tier-dialog-title"><form id="tier-form"><h2 id="tier-dialog-title">编辑评级</h2><label for="tier-name">评级名称</label><textarea id="tier-name" maxlength="300" rows="3" required></textarea><div class="tier-options"><label for="tier-color">颜色 <input id="tier-color" type="color"></label><label for="tier-position">位置 <select id="tier-position"></select></label></div><p id="tier-error" class="form-error" role="alert"></p><div class="dialog-actions"><button id="delete-tier" class="danger" type="button">删除评级</button><button type="button" data-close="tier-dialog">取消</button><button class="primary" type="submit">保存评级</button></div></form></dialog>
+  <dialog id="catalog-dialog" aria-labelledby="catalog-title">
+    <div class="catalog-heading"><h2 id="catalog-title">选择待排遗物</h2><button data-close="catalog-dialog" aria-label="关闭遗物选择">×</button></div>
+    <div class="relic-filters"><label>角色 <select id="catalog-character" aria-label="遗物库角色"></select></label><label>类别 <select id="catalog-rarity" aria-label="遗物库类别"></select></label><label class="relic-search">名称 <input id="catalog-search" type="search" placeholder="搜索名称" aria-label="搜索遗物库"></label></div>
+    <div class="catalog-bulk"><span id="catalog-results"></span><button id="catalog-select">全选结果</button><button id="catalog-deselect">移除结果</button></div>
+    <div id="catalog-grid" aria-label="可选遗物"></div><div class="catalog-actions"><span id="catalog-selection" role="status"></span><button data-close="catalog-dialog">取消</button><button id="apply-catalog" class="primary">应用遗物池</button></div>
+  </dialog>
+  <dialog id="import-dialog" aria-labelledby="import-title"><h2 id="import-title">载入遗物排表</h2><p id="import-summary"></p><p class="form-help">替换当前遗物工作区。载入后可撤销；卡牌排表不受影响。</p><div class="dialog-actions"><button data-close="import-dialog">取消</button><button id="apply-import" class="primary">载入排表</button></div></dialog>
+  <dialog id="image-dialog" aria-labelledby="dialog-caption"><div class="preview-tools"><button data-close="image-dialog" aria-label="关闭图片预览">×</button></div><img id="dialog-image" alt="遗物排行 PNG 预览"><p id="dialog-caption"></p><a id="download-link" hidden>保存 PNG 图片 ↓</a></dialog>
+  <div id="toast" role="status"></div>
+  <script src="relics-data.js"></script><script src="relic-model.js"></script><script src="relic-export.js"></script><script src="relics.js"></script>
+</body>
+</html>

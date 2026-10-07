@@ -61,7 +61,7 @@
     throw new Error('无法读取图片格式，请另存为 PNG、JPG 或 WebP 后重试');
   }
 
-  function create({cards, getCards = () => cards, getLanguage = () => 'zh', onApply}) {
+  function create({cards, getCards = () => cards, getLanguage = () => 'zh', versionCatalog = null, getGameVersion, onApply}) {
     let byId = new Map(cards.map(card => [card.id, card]));
     let catalog = sortCatalog(cards), rememberedColorFilter = '';
     let tiers = [], source = null, sourceUrl = null, selected = null, cropStart = null, cropRect = null;
@@ -70,6 +70,15 @@
     let selectionMode = 'card', selectionTool = 'add', gesture = null;
     let tierLayout = null, pendingLayout = null, originalImage = null;
     let batchKind = null, batchReturnFocus = null, nameEditorKey = null;
+    let importVersion = null;
+    const cardLabel = card => card ? card.name + (versionCatalog ? ` · ${card.gameVersion}${card.gameVersion === importVersion ? '（当前）' : ''}` : '') : '未识别';
+    function reviewMatch(match) {
+      const confidence = Number.isFinite(match.confidence) ? match.confidence : 0;
+      const review = root.SpireScreenshotEngine.classifyReview?.({...match, confidence}) || {reviewLevel: match.reviewLevel || (match.needsReview || confidence < .72 ? 'severe' : 'none'), reviewReason: match.reviewReason || ''};
+      const resolved = versionCatalog ? versionCatalog.screenshotMatch({...match, confidence, ...review}, importVersion) : {...match, confidence, ...review};
+      const id = byId.has(resolved.id) ? resolved.id : null;
+      return {...resolved, id, candidates: (resolved.candidates || []).filter(candidate => byId.has(candidate.id)).slice(0, 8), confirmed: !!id && resolved.reviewLevel === 'none', rawMatch: match};
+    }
     const batchSelection = new Set();
     const dialog = el('dialog', 'ssi-dialog');
     dialog.setAttribute('aria-labelledby', 'ssi-heading');
@@ -286,7 +295,7 @@
       }));
       const problems = getProblems();
       return tiers.flatMap(tier => tier.cards.filter(item => problems.levels.get(item.key) === batchKind).map(item => ({
-        key: item.key, tier, item, name: byId.get(item.id)?.name || '未识别卡牌', box: item.box,
+        key: item.key, tier, item, name: byId.has(item.id) ? cardLabel(byId.get(item.id)) : '未识别卡牌', box: item.box,
         canConfirm: true,
         note: `${tier.name} · ${problems.identityProblems.get(item.key) || (item.duplicateReview ? problems.items.get(item.key) : item.reviewReason || problems.items.get(item.key))}`
       })));
@@ -418,14 +427,14 @@
           const confidenceDescription = `识别置信度 ${confidenceText} · ${problem || ''}${item.reviewReason ? ' · ' + item.reviewReason : ''}`;
           const cardButton = button('', () => { lastTier = tier.key; openEditor(item.key); }, `ssi-review-card${problem ? ' ssi-needs-review ssi-review-' + level : ''}${selected === item.key ? ' ssi-selected' : ''}`);
           cardButton.dataset.reviewKey = String(item.key);
-          cardButton.setAttribute('aria-label', `${card?.name || '未识别卡牌'}${problem ? `，${confidenceDescription}` : ''}，点击校对`);
+          cardButton.setAttribute('aria-label', `${card ? cardLabel(card) : '未识别卡牌'}${problem ? `，${confidenceDescription}` : ''}，点击校对`);
           if (card) { const img = el('img'); img.src = imageOf(card); img.alt = ''; img.loading = 'lazy'; cardButton.append(img); }
           else { const placeholder = el('span', 'ssi-unknown'); placeholder.textContent = '?'; cardButton.append(placeholder); }
           cardButton.append(el('span', 'ssi-card-name', card?.name || '未识别'));
           if (problem) {
             const badge = el('small', 'ssi-card-badge ssi-confidence-badge', confidenceText);
             badge.title = confidenceDescription; cardButton.title = confidenceDescription; cardButton.append(badge);
-          } else if (card?.unavailableInVersion) cardButton.append(el('small', 'ssi-card-badge', '版本外'));
+          } else if (card?.unavailableInVersion) cardButton.append(el('small', 'ssi-card-badge', card.gameVersion || '版本外'));
           rowCards.append(cardButton);
         }
         const add = button('＋ 卡牌', () => {
@@ -496,7 +505,7 @@
       if (hoverKey !== found.item.key) {
         hoverKey = found.item.key;
         const {item, tier} = found, card = byId.get(item.id), b = item.box;
-        hoverTitle.textContent = card?.name || '尚未识别';
+        hoverTitle.textContent = card ? cardLabel(card) : '尚未识别';
         hoverNote.textContent = `${tier.name} · ${getProblems().items.get(item.key) || '已确认'} `;
         const ratio = Math.min(3, 300 / Math.max(b.width, b.height));
         hoverCrop.width = Math.max(1, Math.round(b.width * ratio)); hoverCrop.height = Math.max(1, Math.round(b.height * ratio));
@@ -548,11 +557,10 @@
         if (!root.SpireScreenshotEngine?.analyzeBox) throw new Error('单卡识别组件未加载，请从卡库选择');
         const match = await root.SpireScreenshotEngine.analyzeBox(imageSource.getContext('2d', {willReadFrequently: true}).getImageData(0, 0, imageSource.width, imageSource.height), session.draft.box, {signal});
         if (signal.aborted || session !== editorSession || requestRevision !== revision || source !== imageSource) return;
-        session.draft.candidates = (match?.candidates || []).filter(candidate => byId.has(candidate.id)).slice(0, 8);
-        if (!session.touched) session.draft.id = byId.has(match?.id) ? match.id : session.draft.candidates[0]?.id || null;
-        session.draft.confidence = Number.isFinite(match?.confidence) ? match.confidence : 0;
-        session.draft.reviewReason = match?.reviewReason || '';
-        Object.assign(session.draft, root.SpireScreenshotEngine.classifyReview?.(match) || {});
+        const reviewed = reviewMatch(match);
+        const chosenId = session.draft.id;
+        Object.assign(session.draft, reviewed);
+        if (session.touched) session.draft.id = chosenId;
         session.message = session.draft.candidates.length || session.draft.id ? '已识别候选，请核对卡牌与所属评级后确认' : '未识别到卡牌，请从卡库选择';
       } catch (error) {
         if (signal.aborted || session !== editorSession) return;
@@ -564,10 +572,10 @@
     function renderEditor(refreshChoices = true) {
       const session = editorSession; if (!session || !findItem(session.key)) return;
       catalogPrompt.textContent = getLanguage() === 'en' ? "Can't find the card you want? Look below!" : '没找到想要的牌？从下面寻找！';
-      const card = byId.get(session.draft.id); editName.textContent = card?.name || '选择对应卡牌';
+      const card = byId.get(session.draft.id); editName.textContent = card ? cardLabel(card) : '选择对应卡牌';
       editHeading.textContent = session.isNew ? '校对新增卡牌' : '校对卡牌';
       const problem = getProblems().items.get(session.key);
-      editProblem.textContent = (session.matching ? '正在本机识别… 也可先从卡库选择' : session.message || [problem || '请核对卡牌', session.draft.reviewReason].filter(Boolean).join(' · ')) + (card?.unavailableInVersion ? ' · 此版本未收录，卡面来自 ' + card.gameVersion : '');
+      editProblem.textContent = (session.matching ? '正在本机识别… 也可先从卡库选择' : session.message || [problem || '请核对卡牌', session.draft.reviewReason].filter(Boolean).join(' · ')) + (card?.unavailableInVersion ? ' · 卡面来自 ' + card.gameVersion : '');
       confirm.disabled = !card; remove.hidden = session.isNew; tierSelect.replaceChildren();
       for (const tier of tiers) { const option = el('option', '', tier.name); option.value = String(tier.key); tierSelect.append(option); }
       tierSelect.value = String(session.tierKey);
@@ -625,14 +633,14 @@
       for (const card of list) {
         const pick = button('', () => selectChoice(session, card), quickConfirm ? 'ssi-candidate ssi-recommended-card' : 'ssi-candidate');
         pick.dataset.cardId = card.id;
-        pick.setAttribute('aria-label', quickConfirm ? `推荐${card.name}，双击确认` : `选择${card.name}`); pick.setAttribute('aria-pressed', String(card.id === session.draft.id));
+        pick.setAttribute('aria-label', quickConfirm ? `推荐${cardLabel(card)}，双击确认` : `选择${cardLabel(card)}`); pick.setAttribute('aria-pressed', String(card.id === session.draft.id));
         if (quickConfirm) pick.addEventListener('dblclick', () => {
           if (session !== editorSession) return;
           selectChoice(session, card); confirmEditor();
         });
         if (card.id === session.draft.id) pick.classList.add('ssi-current');
         const img = el('img'); img.src = imageOf(card); img.alt = ''; img.loading = 'lazy';
-        pick.append(img, el('span', '', card.name + (card.unavailableInVersion ? ' · 版本外' : ''))); grid.append(pick);
+        pick.append(img, el('span', '', cardLabel(card) + (!versionCatalog && card.unavailableInVersion ? ' · 版本外' : ''))); grid.append(pick);
       }
     }
     function point(event) {
@@ -843,13 +851,8 @@
         box: tier.box ? {x: tier.box.x * ratioX, y: tier.box.y * ratioY, width: tier.box.width * ratioX, height: tier.box.height * ratioY} : Number.isFinite(tier.y0) && Number.isFinite(tier.y1) ? {x: 0, y: tier.y0 * ratioY, width: canvas.width, height: (tier.y1 - tier.y0) * ratioY} : null,
         labelBox: tier.labelBox ? {x: tier.labelBox.x * ratioX, y: tier.labelBox.y * ratioY, width: tier.labelBox.width * ratioX, height: tier.labelBox.height * ratioY} : null,
         cards: (tier.cards || []).slice(0, cards.length).map(item => {
-          const candidates = (item.candidates || []).filter(candidate => byId.has(candidate.id)).slice(0, 8);
-          const id = byId.has(item.id) ? item.id : null;
-          const confidence = Number.isFinite(item.confidence) ? item.confidence : 0;
-          const review = root.SpireScreenshotEngine.classifyReview?.({...item, id, candidates, confidence}) || {reviewLevel: item.reviewLevel || (item.needsReview || confidence < 0.72 ? 'severe' : 'none'), reviewReason: item.reviewReason || ''};
           const box = item.box ? {x: item.box.x * ratioX, y: item.box.y * ratioY, width: item.box.width * ratioX, height: item.box.height * ratioY} : null;
-          const reviewReason = String(review.reviewReason || '').slice(0, 120);
-          return {key: ++serial, id, candidates, confidence, reviewLevel: review.reviewLevel, confirmed: !!id && review.reviewLevel === 'none', box, reviewReason};
+          return {...reviewMatch(item), key: ++serial, box};
         })
       }));
     }
@@ -960,27 +963,44 @@
       renderTiers();
     }
     async function applyResult() {
+      refreshCatalog();
       updateStatus(); if (apply.disabled) return;
       // Normalize only the submitted copy; keep every crop available for optional review.
       const seen = new Set();
       const result = {title: titleInput.value.trim(), tiers: tiers.map(tier => ({name: tier.name.trim(), color: tier.color, cards: tier.cards.filter(item => {
         if (!byId.has(item.id) || seen.has(item.id)) return false;
         seen.add(item.id); return true;
-      }).map(item => item.id)}))};
+      }).map(item => versionCatalog && byId.get(item.id).gameVersion === importVersion ? byId.get(item.id).baseId : item.id)}))};
       applyBusy = true; updateStatus(); apply.textContent = '正在生成…';
       try { await onApply(result); close(); }
       catch (error) { statusText.textContent = error?.message || '未能生成排表，请重试'; }
       finally { applyBusy = false; apply.textContent = '生成排表'; updateStatus(); }
     }
-    function open(options = {}) {
+    function refreshCatalog() {
+      if (versionCatalog) {
+        const version = getGameVersion();
+        if (version === importVersion) return;
+        const previous = importVersion; importVersion = version;
+        byId = new Map(versionCatalog.screenshotCards(version).map(card => [card.id, card]));
+        catalog = sortCatalog([...byId.values()]);
+        if (previous) for (const tier of tiers) for (const item of tier.cards) {
+          const chosen = byId.get(item.id);
+          const raw = item.reviewAcknowledged && chosen ? {id: chosen.baseId, sourceVersions: [chosen.gameVersion], possibleVersions: [chosen.gameVersion], confidence: item.confidence} : item.rawMatch;
+          if (raw) Object.assign(item, reviewMatch(raw), {box: item.box, reviewAcknowledged: false});
+        }
+        return;
+      }
       const current = new Map(cards.map(card => [card.id, {...card, unavailableInVersion: true}]));
       for (const card of getCards()) current.set(card.id, card);
       byId = current;
       catalog = sortCatalog([...current.values()]);
+    }
+    function open(options = {}) {
+      refreshCatalog();
       if (dialog.open) return;
       returnFocus = document.activeElement;
       if (!source && options.title) titleInput.value = String(options.title).slice(0, 80);
-      dialog.showModal(); updateStatus(); renderSelectionTools();
+      dialog.showModal(); renderTiers(); updateStatus(); renderSelectionTools();
     }
     function close() {
       hideHover(); closeBatch(); cancelEditor(); resetGesture(); abort(false); root.SpireScreenshotEngine?.releaseWorker?.(); if (dialog.open) dialog.close();

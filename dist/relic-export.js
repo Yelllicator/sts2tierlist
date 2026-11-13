@@ -32,9 +32,13 @@
     const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
     if (!ctx) throw Error('浏览器无法创建图片画布');
     const font = size => size + 'px "Microsoft YaHei", system-ui, sans-serif';
+    const qr = window.SpireExportQr;
     ctx.font = font(34);
-    const titleLines = lines(ctx, state.title, width - margin * 2);
-    let height = margin + titleLines.length * 46 + 46;
+    const titleLines = lines(ctx, state.title, width - margin * 2 - qr.size - qr.titleGap);
+    const textHeight = margin + titleLines.length * 46 + 46;
+    const headerHeight = Math.max(textHeight, qr.minHeaderHeight);
+    const textTop = margin + (headerHeight - textHeight) / 2;
+    let height = headerHeight;
     ctx.font = font(19);
     const rows = state.tiers.map(tier => {
       ctx.font = font(19);
@@ -56,9 +60,10 @@
     canvas.width = Math.ceil(width * scale); canvas.height = Math.ceil(height * scale); ctx.scale(scale, scale);
     ctx.fillStyle = '#191711'; ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#f0ebdf'; ctx.font = font(34); ctx.textBaseline = 'top';
-    titleLines.forEach((line, i) => ctx.fillText(line, margin, margin + i * 46));
+    titleLines.forEach((line, i) => ctx.fillText(line, margin, textTop + i * 46));
     ctx.fillStyle = '#aca28b'; ctx.font = font(16);
-    ctx.fillText('尖塔排表 · 遗物 · ' + state.gameVersion + ' · ' + images.size + ' 件已评级', margin, margin + titleLines.length * 46 + 8);
+    ctx.fillText('尖塔排表 · 遗物 · ' + state.gameVersion + ' · ' + images.size + ' 件已评级', margin, textTop + titleLines.length * 46 + 8);
+    qr.draw(ctx, width - margin, headerHeight, scale);
     rows.forEach((row, rowIndex) => {
       ctx.fillStyle = rowIndex % 2 ? '#252219' : '#201e17'; ctx.fillRect(margin, row.top, width - margin * 2, row.height);
       ctx.fillStyle = row.tier.color; ctx.fillRect(margin, row.top, labelWidth, row.height);

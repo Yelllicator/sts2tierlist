@@ -53,7 +53,10 @@ window.SpirePng = (() => {
       const ctx=canvas.getContext('2d');
       if(!ctx)throw Error('浏览器无法创建图片画布');
       ctx.font='600 36px "Microsoft YaHei",sans-serif';
-      const titleLines=lines(ctx,doc.title,width-70),head=48+titleLines.length*44+(doc.gameVersion?26:0);
+      const qr=window.SpireExportQr,headerMargin=35;
+      const titleLines=lines(ctx,doc.title,width-headerMargin*2-qr.size-qr.titleGap);
+      const textHeight=48+titleLines.length*44+(doc.gameVersion?26:0);
+      const head=Math.max(textHeight,qr.minHeaderHeight),textTop=(head-textHeight)/2;
       const labels=doc.tiers.map(t=>labelLayout(ctx,t.name,labelW,Math.max(1,Math.ceil(doc.rows[t.id].length/columns))*(cardH+gap)+pad*2-gap));
       const heights=labels.map(label=>label.height);
       const height=Math.ceil(head+heights.reduce((a,b)=>a+b,0));
@@ -66,8 +69,9 @@ window.SpirePng = (() => {
       }));
       canvas.width=outputWidth;canvas.height=outputHeight;ctx.scale(scale,scale);ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
       ctx.fillStyle=theme.bg;ctx.fillRect(0,0,width,height);ctx.fillStyle='#e8dfc8';ctx.font='600 36px "Microsoft YaHei",sans-serif';ctx.textAlign='left';
-      titleLines.forEach((line,i)=>ctx.fillText(line,35,46+i*44));
-      if(doc.gameVersion){ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillStyle='#b9b5ab';ctx.fillText('v'+doc.gameVersion+(hasForeign?' · † 版本外卡牌，保留所选卡面与规则':''),35,head-20);}
+      titleLines.forEach((line,i)=>ctx.fillText(line,headerMargin,textTop+46+i*44));
+      if(doc.gameVersion){ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillStyle='#b9b5ab';ctx.fillText('v'+doc.gameVersion+(hasForeign?' · † 版本外卡牌，保留所选卡面与规则':''),headerMargin,textTop+textHeight-20);}
+      qr.draw(ctx,width-headerMargin,head,scale);
       let y=head;
       for(let i=0;i<doc.tiers.length;i++){
         const tier=doc.tiers[i];

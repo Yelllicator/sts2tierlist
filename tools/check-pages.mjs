@@ -16,7 +16,7 @@ const excluded = new Set(['reference.png']);
 const forbiddenParts = new Set(['.git', '.env', '.staging', 'assets-provenance', 'tests', 'backups', 'releases']);
 const publicRoots = new Set(['dist', 'tools', '.github', 'README.md', 'SOURCES.md', 'package.json', '.gitattributes', '.public-release.json']);
 const runtimeFiles = new Set([
-  'app.js', 'cards.js', 'card-versions.js', 'versions.js', 'model.js', 'pool-sort.js', 'export.js',
+  'app.js', 'cards.js', 'card-versions.js', 'versions.js', 'model.js', 'pool-sort.js', 'export.js', 'export-qr.js',
   'scheme-store.js', 'scheme-library.js', 'screenshot-engine.js', 'screenshot-import.js', 'screenshot-ocr.js',
   'index.html', 'favicon.svg', 'style.css', 'scheme-library.css', 'screenshot-import.css',
   'relics.html', 'relics.js', 'relic-model.js', 'relics-data.js', 'relics-current.js', 'relic-export.js', 'relics.css', 'site-nav.css',

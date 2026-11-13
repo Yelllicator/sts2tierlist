@@ -7573,6 +7573,7 @@
     "dist/assets/relics/yummy_cookie.webp",
     "dist/card-versions.js",
     "dist/cards.js",
+    "dist/export-qr.js",
     "dist/export.js",
     "dist/favicon.svg",
     "dist/images/abrasive.webp",

@@ -40,7 +40,11 @@
       ctx.font = font(19);
       const labelLines = lines(ctx, tier.name, labelWidth - 24);
       ctx.font = font(15);
-      const items = state.rows[tier.id].map(id => ({relic: byId.get(id), nameLines: lines(ctx, byId.get(id).name, tileWidth - 6)}));
+      const items = state.rows[tier.id].map(id => {
+        const relic = byId.get(id);
+        const nameLines = lines(ctx, relic.name, tileWidth - 6);
+        return {relic, nameLines};
+      });
       const rowHeight = Math.max(116, labelLines.length * 27 + 26, Math.ceil(items.length / columns) * 130 + gap * 2);
       const row = {tier, items, labelLines, top: height, height: rowHeight};
       height += rowHeight + 1;
@@ -67,7 +71,12 @@
         const iw = image.naturalWidth * ratio, ih = image.naturalHeight * ratio;
         ctx.drawImage(image, x + (tileWidth - iw) / 2, y + (76 - ih) / 2, iw, ih);
         ctx.fillStyle = '#f0ebdf'; ctx.font = font(15);
-        item.nameLines.slice(0, 3).forEach((line, j) => ctx.fillText(line, x + tileWidth / 2, y + 80 + j * 17));
+        const version = item.relic.unavailableInVersion;
+        item.nameLines.slice(0, version ? 2 : 3).forEach((line, j) => ctx.fillText(line, x + tileWidth / 2, y + 80 + j * 17));
+        if (version) {
+          ctx.fillStyle = '#f6d4a6'; ctx.font = font(12);
+          ctx.fillText('版本外 · ' + version, x + tileWidth / 2, y + 114);
+        }
       });
     });
     ctx.textAlign = 'left'; ctx.font = font(14); ctx.fillStyle = '#aca28b';

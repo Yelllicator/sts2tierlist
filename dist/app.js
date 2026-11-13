@@ -1,9 +1,10 @@
 'use strict';
 (() => {
   const $=id=>document.getElementById(id);
-  const {createModel,DEFAULT_TIERS,TEMPLATES,clone,matches,compareCards,sortPool}=window.SpireBoardModel;
+  const {createModel,DEFAULT_TIERS,TEMPLATES,CARD_COLORS,clone,matches,compareCards,sortPool}=window.SpireBoardModel;
   const versions=window.SpireCardVersions.create(window.CARD_DATA||[],window.CARD_VERSIONS||[]);
   const templates=new Map(TEMPLATES.map(t=>[t.id,t]));
+  const colorNames=new Map(CARD_COLORS.map(color=>[color.id,color.name]));
   const model=createModel(versions.getAllCards(),undefined,versions);
   let cards=[],byId=new Map(),catalogCards=[],renderedVersion=null;
   const LEGACY_KEY='spire-tier-list-silent-v1',KEY='spire-tier-workspace-v3';
@@ -26,14 +27,18 @@
   let cardFocusOrigin=null;
   let dragScrollPoint=null,dragScrollFrame=0,dragScrollTime=null;
   let screenshotImporter=null,schemeLibrary=null,poolSortControl=null;
-  function defaultFilters(){return {color:state.templateId==='custom'?'all':state.templateId,type:'all',cost:'all',multiplayer:'all',query:''};}
+  function defaultFilters(){return {color:state.templateId==='custom'?'all':state.templateId,type:[],cost:[],multiplayer:'all',query:''};}
   let poolFilters=defaultFilters(),catalogFilters=defaultFilters();
   function syncVersion(){
     cards=versions.cardsForBoard(state);byId=new Map(cards.map(c=>[c.id,c]));
     catalogCards=[...versions.getCards(state.gameVersion)].sort(compareCards);
     $('game-version').value=state.gameVersion;
     if(renderedVersion!==state.gameVersion){
-      for(const button of $('template-tabs').querySelectorAll('button'))button.querySelector('small').textContent=button.dataset.template==='custom'?'自由选牌':catalogCards.filter(c=>c.color===button.dataset.template).length+' 张';
+      for(const button of $('template-tabs').querySelectorAll('button')){
+        const {template}=button.dataset, count=catalogCards.filter(c=>c.color===template).length;
+        const introduction=templates.get(template).introducedIn;
+        button.querySelector('small').textContent=template==='custom'?'自由选牌':!count&&introduction?'始于 '+introduction:count+' 张';
+      }
       renderedVersion=state.gameVersion;
     }
   }
@@ -58,10 +63,12 @@
   function closeDrafts(){screenshotImporter?.close();schemeLibrary?.close();for(const id of ['title-dialog','tier-dialog','confirm-dialog','catalog-dialog','card-dialog','image-dialog'])$(id).close();editingTier=null;$('accept-confirm').onclick=null;}
   function switchTemplate(id){
     if(id===state.templateId)return;
+    const preferred=state.gameVersion;
+    const next=workspace.boards[id]||model.createTemplate(id,state.language,model.templateVersion(id,preferred));
     closeDrafts();workspace.boards[state.templateId]=clone(state);histories.set(state.templateId,{undo,redo});
     const history=histories.get(id);undo=history?.undo||[];redo=history?.redo||[];
-    state=clone(workspace.boards[id]||model.createTemplate(id,state.language,state.gameVersion));selected=null;dragging=null;
-    resetFilterControls();save();render();notify('已切换到'+templates.get(id).name);
+    state=clone(next);selected=null;dragging=null;
+    resetFilterControls();save();render();notify('已切换到'+templates.get(id).name+(state.gameVersion!==preferred?' · '+state.gameVersion:''));
   }
   function move(id,tier,before=null,manualPool=false){
     if(!byId.has(id)||!model.locate(state,id)||!Object.hasOwn(state.rows,tier)||id===before)return;
@@ -202,6 +209,7 @@
     if(!ids.length){const hint=document.createElement('span');hint.className='zone-hint';hint.textContent=zone.dataset.tier==='pool'?(state.rows.pool.length?'无匹配卡牌':'暂无卡牌'):'';zone.append(hint);}
   }
   function renderPool(){
+    syncFilterButtons('pool',cards);
     const visible=sortPool(state.rows.pool.filter(id=>matches(byId.get(id),poolFilters)),byId,state.poolSort);fillZone($('pool'),visible);
     $('pool-count').textContent=visible.length+' / '+state.rows.pool.length;
     poolSortControl?.render();
@@ -358,21 +366,30 @@
     if(!c||!current){$('card-dialog').close();return;}
     $('detail-image').src=imageSource(c,state.language);$('detail-image').alt=c.name+(state.language==='zh'?'中文':'英文')+'完整卡面';
     $('detail-name').textContent=c.name;$('detail-english').textContent=c.english||'';
-    $('detail-meta').textContent=[templates.get(c.color)?.name,c.type,c.rarity,c.unavailableInVersion?'版本外 · 卡面与规则 '+c.gameVersion:state.gameVersion].filter(Boolean).join(' / ');
+    const metadata=new Set([colorNames.get(c.color),c.type,c.rarity,c.unavailableInVersion?'版本外 · 卡面与规则 '+c.gameVersion:state.gameVersion]);
+    $('detail-meta').textContent=[...metadata].filter(Boolean).join(' / ');
+    const keywords=state.language==='zh'?(c.keywordsZh||c.keywords):c.keywords;
+    const keywordSummary=$('detail-keywords');
+    keywordSummary.hidden=!!c.description||!keywords?.length;
+    keywordSummary.textContent=keywordSummary.hidden?'':keywords.join(' · ');
     $('detail-number').textContent=(state.tiers.find(t=>t.id===current)?.name||'待排')+' · '+(state.rows[current].indexOf(selected)+1);
     $('move-actions').replaceChildren(...state.tiers.map(t=>{const b=document.createElement('button');b.textContent=t.name;b.style.setProperty('--tier-color',t.color);b.style.color=contrast(t.color);b.disabled=current===t.id;b.onclick=()=>move(selected,t.id);return b;}));
     $('move-pool').disabled=current==='pool';
   }
   const filterGroups=[
-    {key:'color',label:'颜色',options:[['all','全部'],...TEMPLATES.filter(t=>t.id!=='custom').map(t=>[t.id,t.name,t.color])]},
-    {key:'type',label:'类型',options:[['all','全部'],['攻击','攻击'],['技能','技能'],['能力','能力']]},
-    {key:'cost',label:'费用',options:[['all','全部'],['0','0'],['1','1'],['2','2'],['3','3'],['4+','4+'],['X','X'],['-1','无法打出']]},
+    {key:'color',label:'牌池',options:[['all','全部'],...CARD_COLORS.map(c=>[c.id,c.name,c.color,!!c.introducedIn||!templates.has(c.id)])]},
+    {key:'type',label:'类型',multiple:true,options:[['all','全部'],['攻击','攻击'],['技能','技能'],['能力','能力'],...['状态','诅咒','任务'].map(name=>[name,name,null,true])]},
+    {key:'cost',label:'费用',multiple:true,options:[['all','全部'],['0','0'],['1','1'],['2','2'],['3','3'],['4+','4+'],['X','X'],['-1','无法打出']]},
     {key:'multiplayer',label:'多人牌',options:[['all','全部'],['exclude','隐藏多人牌'],['only','仅多人牌']]}
   ];
-  function syncFilterButtons(scope){
+  function syncFilterButtons(scope,choices){
     const filters=scope==='pool'?poolFilters:catalogFilters;
+    const colors=choices&&new Set(choices.map(c=>c.color)),types=choices&&new Set(choices.map(c=>c.type));
     $(scope+'-filters').querySelectorAll('button').forEach(button=>{
-      button.setAttribute('aria-pressed',String(filters[button.dataset.filter]===button.dataset.value));
+      const {filter,value,availableOnly}=button.dataset,selection=filters[filter];
+      const selected=Array.isArray(selection)?(value==='all'?selection.length===0:selection.includes(value)):selection===value;
+      button.setAttribute('aria-pressed',String(selected));
+      if(choices&&availableOnly)button.hidden=!selected&&!(filter==='color'?colors:types).has(value);
     });
   }
   function createFilterButtons(scope){
@@ -381,12 +398,17 @@
       const row=document.createElement('div');row.className='filter-row';
       const label=document.createElement('span');label.className='filter-label';label.id=scope+'-'+group.key+'-label';label.textContent=group.label;
       const options=document.createElement('div');options.className='filter-options';options.setAttribute('role','group');options.setAttribute('aria-labelledby',label.id);
-      for(const [value,text,color] of group.options){
+      if(group.multiple){const hint=document.createElement('small');hint.textContent='可多选';label.append(hint);}
+      for(const [value,text,color,availableOnly] of group.options){
         const button=document.createElement('button');button.type='button';button.dataset.filter=group.key;button.dataset.value=value;button.textContent=text;
+        if(availableOnly)button.dataset.availableOnly='true';
         if(color){button.style.setProperty('--chip-color',color);const dot=document.createElement('span');dot.className='filter-swatch';dot.setAttribute('aria-hidden','true');button.prepend(dot);}
         button.onclick=()=>{
           const filters=scope==='pool'?poolFilters:catalogFilters;
-          filters[group.key]=value;syncFilterButtons(scope);
+          const selected=filters[group.key];
+          if(!group.multiple)filters[group.key]=value;
+          else if(value==='all')filters[group.key]=[];
+          else filters[group.key]=selected.includes(value)?selected.filter(item=>item!==value):[...selected,value];
           if(scope==='pool')renderPool();else{renderCatalog();$('catalog-grid').scrollTop=0;}
         };options.append(button);
       }
@@ -412,14 +434,15 @@
       return {...c,catalogDifferent:outside&&!same,catalogSame:outside&&same};
     }).sort((a,b)=>Number(b.catalogDifferent)-Number(a.catalogDifferent)||compareCards(a,b));
   }
-  function catalogMatches(){return catalogChoices().filter(c=>matches(c,catalogFilters));}
+  function catalogMatches(choices=catalogChoices()){return choices.filter(c=>matches(c,catalogFilters));}
   function updateCatalogCount(){$('catalog-selection').textContent='已选待排 '+draftPool.size+' 张';}
   function renderCatalog(){
-    const visible=catalogMatches(),ranked=new Set(state.tiers.flatMap(t=>state.rows[t.id]));
+    const choices=catalogChoices(),visible=catalogMatches(choices),ranked=new Set(state.tiers.flatMap(t=>state.rows[t.id]));
+    syncFilterButtons('catalog',choices);
     $('catalog-results').textContent='找到 '+visible.length+' 张卡牌';
     $('catalog-grid').replaceChildren(...visible.map(c=>{
       const label=document.createElement('label');label.className='catalog-card'+(ranked.has(c.id)?' locked':'')+(c.catalogSame?' catalog-same':'');
-      const input=document.createElement('input');input.type='checkbox';input.value=c.id;input.checked=ranked.has(c.id)||draftPool.has(c.id);input.disabled=ranked.has(c.id);input.setAttribute('aria-label','选择 '+c.name+' · '+templates.get(c.color).name+' · '+c.gameVersion+(c.unavailableInVersion?' · 版本外':'')+(c.catalogSame?' · 与当前版本相同':''));
+      const input=document.createElement('input');input.type='checkbox';input.value=c.id;input.checked=ranked.has(c.id)||draftPool.has(c.id);input.disabled=ranked.has(c.id);input.setAttribute('aria-label','选择 '+c.name+' · '+(colorNames.get(c.color)||c.color)+' · '+c.gameVersion+(c.unavailableInVersion?' · 版本外':'')+(c.catalogSame?' · 与当前版本相同':''));
       const img=document.createElement('img');img.src=thumbnailSource(c,state.language);img.loading='lazy';img.decoding='async';img.alt=c.name+'完整卡面';
       const name=document.createElement('strong');name.textContent=c.name;
       label.append(input,img,name);

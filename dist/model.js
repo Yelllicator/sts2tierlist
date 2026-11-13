@@ -10,25 +10,46 @@
     {id:'defect',name:'故障机器人',english:'THE DEFECT',color:'#70b9e3',theme:{bg:'#101720',panel:'#182635',row:'#111d29',alternate:'#172535',line:'#304b62',accent:'#95cee9',muted:'#94aabb',glow:'#315f8066'}},
     {id:'necrobinder',name:'亡灵契约师',english:'THE NECROBINDER',color:'#b493df',theme:{bg:'#18111f',panel:'#261d32',row:'#1b1424',alternate:'#231b2e',line:'#4b3a60',accent:'#d0b6ec',muted:'#ab9cba',glow:'#57387866'}},
     {id:'regent',name:'储君',english:'THE REGENT',color:'#ecc25d',theme:{bg:'#1c1710',panel:'#2c2418',row:'#211a10',alternate:'#2a2115',line:'#51422b',accent:'#efc96f',muted:'#b8ab8a',glow:'#775d2766'}},
+    {id:'fool',name:'愚者',english:'THE FOOL',color:'#dbd575',introducedIn:'0.113.0',theme:{bg:'#181a10',panel:'#282a1b',row:'#1d2014',alternate:'#25281a',line:'#484a2d',accent:'#e0db86',muted:'#b2b096',glow:'#62642a66'}},
     {id:'colorless',name:'无色牌',english:'COLORLESS',color:'#c6d4da',theme:{bg:'#15191d',panel:'#232a30',row:'#191f24',alternate:'#20272d',line:'#424d55',accent:'#d0dde3',muted:'#a6b3bb',glow:'#59687355'}},
     {id:'custom',name:'无预设',english:'YOUR COLLECTION',color:'#baa999',theme:{bg:'#191714',panel:'#28241f',row:'#1e1b17',alternate:'#26211c',line:'#4d443b',accent:'#d8bfa3',muted:'#afa497',glow:'#66534755'}}
   ];
   const RESERVED=new Set(['pool','__proto__','constructor','prototype']);
   const templateById=new Map(TEMPLATES.map(t=>[t.id,t]));
+  const EXTRA_POOLS=[
+    {id:'event',name:'事件',color:'#80b98d'},
+    {id:'token',name:'衍生',color:'#acaeb9'},
+    {id:'status',name:'状态',color:'#b1bdc8'},
+    {id:'curse',name:'诅咒',color:'#aa91bd'},
+    {id:'quest',name:'任务',color:'#d2a279'}
+  ];
+  const CARD_COLORS=[...TEMPLATES.filter(t=>t.id!=='custom'),...EXTRA_POOLS];
   const colorOf=card=>card.color||'silent';
+  // The legacy catalog stores only the English names of its printed keywords.
+  const LEGACY_KEYWORDS_ZH={Exhaust:'消耗',Innate:'固有',Ethereal:'虚无',Retain:'保留',Sly:'奇巧',Eternal:'永恒',Unplayable:'不能被打出'};
+  const searchText=text=>text.replace(/\s+/g,' ').trim().toLowerCase();
+  const descriptionText=text=>(text||'').replace(/\[\/?(?:gold|purple)\]|\[(?:energy|star):\d+\]/g,'');
+  function matchesAny(selection,match){
+    if(Array.isArray(selection))return selection.length===0||selection.some(match);
+    return !selection||selection==='all'||match(selection);
+  }
   function matches(card,filters={}){
     if(filters.color&&filters.color!=='all'&&colorOf(card)!==filters.color)return false;
-    if(filters.type&&filters.type!=='all'&&card.type!==filters.type)return false;
+    if(!matchesAny(filters.type,type=>card.type===type))return false;
     if(filters.multiplayer==='only'&&card.multiplayerOnly!==true)return false;
     if(filters.multiplayer==='exclude'&&card.multiplayerOnly===true)return false;
-    const cost=String(card.cost),wanted=filters.cost||'all';
-    if(wanted!=='all'&&(wanted==='4+'?!(Number(cost)>=4):wanted!==cost))return false;
-    const query=(filters.query||'').trim().toLowerCase();
-    return !query||[card.name,card.english,card.id].join(' ').toLowerCase().includes(query);
+    const cost=String(card.cost),unplayable=card.costKind==='unplayable'||cost==='—'||cost==='-1';
+    if(!matchesAny(filters.cost,value=>value==='-1'?unplayable:value==='4+'?Number(cost)>=4:cost===value))return false;
+    const query=searchText(filters.query||'');
+    if(!query)return true;
+    const keywords=card.keywords||[];
+    const keywordsZh=card.keywordsZh??keywords.map(keyword=>LEGACY_KEYWORDS_ZH[keyword]);
+    return [card.name,card.english,card.id,descriptionText(card.description),descriptionText(card.descriptionEn),...keywords,...keywordsZh]
+      .some(text=>typeof text==='string'&&searchText(text).includes(query));
   }
-  const SORT_COLORS=['ironclad','silent','regent','necrobinder','defect','colorless'];
-  const SORT_RARITIES=['基础','普通','罕见','稀有','古老'];
-  const SORT_TYPES=['攻击','技能','能力'];
+  const SORT_COLORS=['ironclad','silent','regent','necrobinder','defect','fool','colorless',...EXTRA_POOLS.map(pool=>pool.id)];
+  const SORT_RARITIES=['基础','普通','罕见','稀有','古老',...EXTRA_POOLS.map(pool=>pool.name)];
+  const SORT_TYPES=['攻击','技能','能力','状态','诅咒','任务'];
   const DEFAULT_POOL_SORT=Object.freeze(['rarity','type','cost'].map(key=>Object.freeze({key,direction:'desc'})));
   function normalizePoolSort(input){
     if(input===undefined)return DEFAULT_POOL_SORT.map(item=>({...item}));
@@ -85,6 +106,11 @@
       return {gameVersion:id};
     }
     const versionCards=id=>versionCatalog?versionCatalog.getCards(id):cards;
+    function templateVersion(templateId, preferred) {
+      const introduction = templateById.get(templateId)?.introducedIn;
+      if (introduction && versionCatalog?.hasVersion(introduction) && !versionCards(preferred).some(card=>colorOf(card)===templateId)) return introduction;
+      return preferred;
+    }
     function createTemplate(templateId,language='zh',gameVersion=versionCatalog?.defaultVersion){
       const template=templateById.get(templateId);if(!template)throw Error('模板不存在');
       const version=versionFields(gameVersion);
@@ -204,8 +230,8 @@
       if(!Object.hasOwn(boards,input.activeTemplate))throw Error('本地存档缺少当前模板');
       return {format:'spire-tier-workspace',version:3,activeTemplate:input.activeTemplate,boards};
     }
-    return {original,createTemplate,validate,setGameVersion,setPoolSort,locate,move,removeTier,setPool,addToPool,removeFromPool,clearRanks,autoColorTiers,fromScreenshot,validateWorkspace,matches};
+    return {original,createTemplate,templateVersion,validate,setGameVersion,setPoolSort,locate,move,removeTier,setPool,addToPool,removeFromPool,clearRanks,autoColorTiers,fromScreenshot,validateWorkspace,matches};
   }
-  const api={createModel,DEFAULT_TITLE,DEFAULT_TIERS,TEMPLATES,MAX_TIER_NAME_LENGTH,DEFAULT_POOL_SORT,normalizePoolSort,sortPool,clone,matches,compareCards};
+  const api={createModel,DEFAULT_TITLE,DEFAULT_TIERS,TEMPLATES,CARD_COLORS,MAX_TIER_NAME_LENGTH,DEFAULT_POOL_SORT,normalizePoolSort,sortPool,clone,matches,compareCards};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.SpireBoardModel=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

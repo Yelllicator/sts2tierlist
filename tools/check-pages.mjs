@@ -19,7 +19,7 @@ const runtimeFiles = new Set([
   'app.js', 'cards.js', 'card-versions.js', 'versions.js', 'model.js', 'pool-sort.js', 'export.js',
   'scheme-store.js', 'scheme-library.js', 'screenshot-engine.js', 'screenshot-import.js', 'screenshot-ocr.js',
   'index.html', 'favicon.svg', 'style.css', 'scheme-library.css', 'screenshot-import.css',
-  'relics.html', 'relics.js', 'relic-model.js', 'relics-data.js', 'relic-export.js', 'relics.css', 'site-nav.css',
+  'relics.html', 'relics.js', 'relic-model.js', 'relics-data.js', 'relics-current.js', 'relic-export.js', 'relics.css', 'site-nav.css',
   'images/thumbs/manifest.json', 'recognition/index.json', 'recognition/README.txt',
   'vendor/ocr/local-worker.js', 'vendor/ocr/manifest.json', 'vendor/ocr/README.md'
 ]);
@@ -101,10 +101,10 @@ if (publishedCopy) {
   for (const file of ['versions.js', 'model.js']) vm.runInNewContext(read(file), scope, {filename: file, timeout: 10000});
   const catalog = scope.SpireCardVersions.create(scope.window.CARD_DATA, scope.window.CARD_VERSIONS);
   const model = scope.SpireBoardModel.createModel(catalog.getAllCards(), undefined, catalog);
-  assert.equal(catalog.defaultVersion, '0.111.0', 'Unexpected default game version');
+  assert.equal(catalog.defaultVersion, '0.113.0', 'Unexpected default game version');
   for (const template of scope.SpireBoardModel.TEMPLATES) {
     const board = model.createTemplate(template.id);
-    assert.equal(board.gameVersion, '0.111.0');
+    assert.equal(board.gameVersion, catalog.defaultVersion);
     assert.ok(board.tiers.every(tier => board.rows[tier.id].length === 0), `Nonempty default ranking: ${template.id}`);
   }
   const legacy = model.createTemplate('silent', 'en', catalog.legacyVersion);
@@ -128,18 +128,24 @@ for (const cards of catalogs) {
 // Relic assets are allowed only when the fixed catalog names that exact path.
 // A matching extension or directory alone must not admit private extra images.
 const relicImages = new Set();
-if (files.has('relics.html') || files.has('relics-data.js')) {
+if (files.has('relics.html') || files.has('relics-data.js') || files.has('relics-current.js')) {
   checkReference('relics.html');
-  checkReference('relics-data.js', 'relics.html');
-  vm.runInNewContext(read('relics-data.js'), scope, {filename: 'relics-data.js', timeout: 10000});
-  const relics = scope.window.RELICS_DATA?.relics;
-  assert.ok(Array.isArray(relics) && relics.length > 0, 'Missing fixed relic catalog');
-  const ids = new Set();
-  for (const relic of relics) {
-    assert.ok(typeof relic.id === 'string' && /^[A-Z][A-Z0-9_]*$/.test(relic.id) && !ids.has(relic.id), 'Invalid or duplicate relic ID');
-    ids.add(relic.id);
-    assert.equal(relic.image, `assets/relics/${relic.id.toLowerCase()}.webp`, `Unexpected relic image path: ${relic.id}`);
-    relicImages.add(checkReference(relic.image, 'relics-data.js'));
+  const scripts = [['relics-data.js', 'RELICS_DATA', '']];
+  if (files.has('relics-current.js') || read('relics.html').includes('relics-current.js')) {
+    scripts.push(['relics-current.js', 'RELICS_CURRENT', '0.113.0/']);
+  }
+  for (const [file, globalName, imageDirectory] of scripts) {
+    checkReference(file, 'relics.html');
+    vm.runInNewContext(read(file), scope, {filename: file, timeout: 10000});
+    const relics = scope.window[globalName]?.relics;
+    assert.ok(Array.isArray(relics) && relics.length > 0, 'Missing fixed relic catalog');
+    const ids = new Set();
+    for (const relic of relics) {
+      assert.ok(typeof relic.id === 'string' && /^[A-Z][A-Z0-9_]*$/.test(relic.id) && !ids.has(relic.id), 'Invalid or duplicate relic ID');
+      ids.add(relic.id);
+      assert.equal(relic.image, `assets/relics/${imageDirectory}${relic.id.toLowerCase()}.webp`, `Unexpected relic image path: ${relic.id}`);
+      relicImages.add(checkReference(relic.image, file));
+    }
   }
 }
 

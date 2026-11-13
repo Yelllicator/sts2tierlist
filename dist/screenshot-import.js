@@ -206,7 +206,7 @@
     const versionLabel = el('label', 'ssi-catalog-version'); versionLabel.hidden = !versionCatalog;
     const versionFilter = el('select'); versionFilter.setAttribute('aria-label', '校对卡库版本');
     for (const version of versionCatalog?.versions || []) { const option = el('option', '', version.label || version.id); option.value = version.id; versionFilter.append(option); }
-    versionFilter.addEventListener('change', () => { renderCandidates(); candidateGrid.scrollTop = 0; });
+    versionFilter.addEventListener('change', () => { setupFilters(true); renderCandidates(); candidateGrid.scrollTop = 0; });
     versionLabel.append(el('span', '', '版本'), versionFilter); catalogHeading.append(catalogPrompt, versionLabel);
     catalogPanel.append(catalogHeading, search, filterBar, candidateHeading, candidateGrid);
     editor.append(editHeader, editTop, catalogPanel, editorFooter);
@@ -595,13 +595,16 @@
       if (refreshChoices) { renderRecommendations(); renderCandidates(); }
       else updateChoiceSelection();
     }
-    function setupFilters() {
-      const colorNames = {ironclad: '铁甲战士', silent: '静默猎手', regent: '储君', necrobinder: '亡灵契约师', defect: '故障机器人', colorless: '无色', curse: '诅咒', status: '状态'};
+    function setupFilters(preserve = false) {
+      const colorNames = Object.fromEntries(root.SpireBoardModel.CARD_COLORS.map(color => [color.id, color.name]));
+      colorNames.colorless = '无色';
+      const choices = versionCatalog ? versionCatalog.getCards(versionFilter.value) : catalog;
       for (const [field, key, label, names] of [[colorFilter, 'color', '全部职业 / 颜色', colorNames], [rarityFilter, 'rarity', '全部稀有度', {}], [typeFilter, 'type', '全部类型', {}], [costFilter, 'cost', '全部费用', {}]]) {
+        const selected = key === 'color' ? rememberedColorFilter : preserve ? field.value : '';
         field.replaceChildren(); const all = el('option', '', label); all.value = ''; field.append(all);
-        const values = [...new Set(catalog.map(card => String(card[key] ?? '')))].filter(Boolean).sort((a, b) => (key === 'color' ? 1 : -1) * root.SpireBoardModel.compareCards({id: '', [key]: a}, {id: '', [key]: b}) || a.localeCompare(b, 'zh-CN', {numeric: true}));
+        const values = [...new Set(choices.map(card => String(card[key] ?? '')))].filter(Boolean).sort((a, b) => (key === 'color' ? 1 : -1) * root.SpireBoardModel.compareCards({id: '', [key]: a}, {id: '', [key]: b}) || a.localeCompare(b, 'zh-CN', {numeric: true}));
         for (const value of values) { const option = el('option', '', names[value] || value); option.value = value; field.append(option); }
-        field.value = key === 'color' && values.includes(rememberedColorFilter) ? rememberedColorFilter : '';
+        field.value = values.includes(selected) ? selected : '';
       }
     }
     function renderCandidates() {

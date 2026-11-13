@@ -430,7 +430,7 @@
       const errors=positions.filter(p=>sample.mask[p]&&ref[p*4+3]>220).map(p=>chromaError(Array.from(sample.pixels.slice(p*3,p*3+3)),Array.from(ref.slice(p*4,p*4+3)))).sort((a,b)=>a-b);
       if(errors.length<4)continue;
       const error=errors[Math.floor(errors.length*.6)];
-      result[key]={label:key==='color'?entry.card.color:family,support:errors.length,error};
+      result[key]={label:key==='color'?(record.labels[0].color||entry.card.color):family,support:errors.length,error};
       // Bounded soft penalty: even an incorrect color estimate cannot remove
       // an identity from the unrestricted geometry/artwork candidate paths.
       result.penalty+=.004*Math.min(1,error/.055);

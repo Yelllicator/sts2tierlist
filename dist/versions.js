@@ -1,8 +1,10 @@
 'use strict';
 ((root)=>{
   function create(legacyCards,versions){
-    const legacyVersion='0.103.3',defaultVersion='0.111.0';
-    const entries=[...versions,{id:legacyVersion,label:'旧版 0.103.3',channel:'legacy',cards:legacyCards}];
+    const legacyVersion='0.103.3';
+    const entries=[...versions,{id:legacyVersion,label:'旧版 0.103.3',channel:'legacy',cards:legacyCards}]
+      .sort((a,b)=>b.id.localeCompare(a.id,'en',{numeric:true}));
+    const defaultVersion=entries[0].id;
     const catalogs=new Map(),all=new Map();
     for(const entry of entries){
       if(catalogs.has(entry.id)||!Array.isArray(entry.cards))throw Error('卡牌版本目录无效');
@@ -11,12 +13,22 @@
         if(byId.has(card.id))throw Error('版本目录含重复卡牌');
         const value=Object.freeze({...card,baseId:card.id,gameVersion:entry.id});byId.set(card.id,value);
         // Keep the newest available definition as the explicit fallback for cross-version boards.
-        if(!all.has(card.id)||entry.id===defaultVersion)all.set(card.id,value);
+        if(!all.has(card.id))all.set(card.id,value);
       }
       catalogs.set(entry.id,{...entry,cards:Object.freeze([...byId.values()]),byId});
     }
-    if(!catalogs.has(defaultVersion))throw Error('缺少默认卡牌版本');
     const get=id=>{const result=catalogs.get(id);if(!result)throw Error('不支持的游戏版本');return result;};
+    function fallback(ref,version){
+      const order=entries.findIndex(entry=>entry.id===version);
+      // Prefer the closest earlier snapshot, then the first later snapshot
+      // that introduced the card. Newer updates should not move an old save's fallback.
+      for(let i=order+1;i<entries.length;i++){
+        const card=catalogs.get(entries[i].id).byId.get(ref);if(card)return card;
+      }
+      for(let i=order-1;i>=0;i--){
+        const card=catalogs.get(entries[i].id).byId.get(ref);if(card)return card;
+      }
+    }
     function cardRef(baseId,version){
       const entry=get(version);
       if(typeof baseId!=='string'||baseId.includes('@')||!entry.byId.has(baseId))throw Error('版本目录含未知卡牌');
@@ -34,7 +46,7 @@
       if(ref.includes('@')){
         if(!hasCardRef(ref))throw Error('方案含未知卡牌或版本');
         const [baseId,version]=ref.split('@');card=get(version).byId.get(baseId);
-      }else card=entry.byId.get(ref)||all.get(ref);
+      }else card=entry.byId.get(ref)||fallback(ref,entry.id);
       if(!card)throw Error('方案含未知卡牌');
       return Object.freeze({...card,id:ref,baseId:card.baseId,unavailableInVersion:card.gameVersion!==entry.id});
     }
@@ -82,7 +94,7 @@
       return [...catalogs.values()].flatMap(entry=>entry.cards.map(card=>resolve(cardRef(card.id,entry.id),currentVersion)));
     }
     return Object.freeze({legacyVersion,defaultVersion,
-      versions:Object.freeze([...entries].sort((a,b)=>b.id.localeCompare(a.id,'en',{numeric:true})).map(({cards,...info})=>Object.freeze(info))),
+      versions:Object.freeze(entries.map(({cards,...info})=>Object.freeze(info))),
       hasVersion:id=>catalogs.has(id),getCards:id=>get(id).cards,
       getAllCards:()=>Object.freeze([...all.values()]),cardsForBoard,cardRef,hasCardRef,resolve,sameDefinition,screenshotMatch,screenshotCards,
       label:id=>get(id||legacyVersion).label

@@ -15,28 +15,34 @@
   const validColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
   const validTierId = value => typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/i.test(value) && !RESERVED.has(value);
 
-  function createModel(relics, gameVersion = '0.111.0') {
-    if (!Array.isArray(relics) || typeof gameVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(gameVersion)) {
-      throw Error('遗物目录或游戏版本无效');
-    }
-    const ids = [], known = new Set();
-    for (const relic of relics) {
-      if (!isRecord(relic) || !validText(relic.id, 160) || known.has(relic.id)) throw Error('遗物目录 ID 无效或重复');
-      ids.push(relic.id);
-      known.add(relic.id);
+  function createModel(relics, gameVersion = '0.111.0', otherCatalogs = []) {
+    const catalogs = new Map(), known = new Set();
+    for (const catalog of [{relics, gameVersion}, ...otherCatalogs]) {
+      const version = catalog?.gameVersion;
+      if (!Array.isArray(catalog?.relics) || typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version) || catalogs.has(version)) {
+        throw Error('遗物目录或游戏版本无效');
+      }
+      const ids = new Set();
+      for (const relic of catalog.relics) {
+        if (!isRecord(relic) || !validText(relic.id, 160) || ids.has(relic.id)) throw Error('遗物目录 ID 无效或重复');
+        ids.add(relic.id);
+        known.add(relic.id);
+      }
+      catalogs.set(version, ids);
     }
 
-    function create() {
+    function create(version = gameVersion) {
+      if (!catalogs.has(version)) throw Error('遗物排表的游戏版本不受支持');
       const tiers = DEFAULT_TIERS.map(tier => ({...tier}));
       const rows = Object.fromEntries(tiers.map(tier => [tier.id, []]));
-      rows.pool = [...ids];
-      return {version:1, kind:KIND, gameVersion, title:'遗物排行', tiers, rows};
+      rows.pool = [...catalogs.get(version)];
+      return {version:1, kind:KIND, gameVersion:version, title:'遗物排行', tiers, rows};
     }
 
     // Build a detached, known-shape document only after every row has passed validation.
     function validate(input) {
       if (!isRecord(input) || input.version !== 1 || input.kind !== KIND) throw Error('不是受支持的遗物排表文件');
-      if (input.gameVersion !== gameVersion) throw Error('遗物排表的游戏版本不受支持');
+      if (!catalogs.has(input.gameVersion)) throw Error('遗物排表的游戏版本不受支持');
       if (!validText(input.title, 80)) throw Error('排表标题须为 1–80 个字符');
       if (!Array.isArray(input.tiers) || input.tiers.length < 1 || input.tiers.length > 30) throw Error('评级数量须为 1–30 档');
       if (!isRecord(input.rows)) throw Error('遗物排表行数据无效');
@@ -58,14 +64,14 @@
         if (!Array.isArray(list)) throw Error('遗物行必须为数组');
         const row = [];
         for (const id of list) {
-          if (typeof id !== 'string' || !known.has(id)) throw Error('遗物 ID 不在当前目录中');
+          if (typeof id !== 'string' || !known.has(id)) throw Error('遗物 ID 不在受支持的目录中');
           if (used.has(id)) throw Error('同一遗物不能重复出现');
           used.add(id);
           row.push(id);
         }
         rows[rowId] = row;
       }
-      return {version:1, kind:KIND, gameVersion, title:input.title, tiers, rows};
+      return {version:1, kind:KIND, gameVersion:input.gameVersion, title:input.title, tiers, rows};
     }
 
     function move(state, id, target, index) {

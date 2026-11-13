@@ -1,14 +1,16 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const data = window.RELICS_DATA;
-  const model = window.SpireRelicModel.createModel(data.relics, data.gameVersion);
-  const byId = new Map(data.relics.map(relic => [relic.id, relic]));
+  const latest = window.RELICS_CURRENT, legacy = window.RELICS_DATA;
+  const catalogs = new Map([latest, legacy].map(catalog => [catalog.gameVersion, {
+    ...catalog, byId: new Map(catalog.relics.map(relic => [relic.id, relic]))
+  }]));
+  const model = window.SpireRelicModel.createModel(latest.relics, latest.gameVersion, [legacy]);
   const KEY = 'spire-relic-workspace-v1';
   const clone = value => JSON.parse(JSON.stringify(value));
   let state = model.create(), unreadable = null, undo = [], redo = [], selected = null;
   let editingTier = null, pendingImport = null, previewUrl = null, drag = null, lastDrop = 0;
-  let draftPool = new Set(), locked = new Set(), toastTimer;
+  let draftPool = new Set(), locked = new Set(), toastTimer, renderedVersion;
   const defaultFilters = () => ({character: 'all', rarity: 'all', query: ''});
   let filters = defaultFilters(), catalogFilters = defaultFilters(), sort = 'manual';
   try {
@@ -63,28 +65,39 @@
     to.push(clone(state)); state = from.pop();
     save(); render();
   }
+  function relicInfo(id, version = state.gameVersion) {
+    const relic = catalogs.get(version).byId.get(id);
+    if (relic) return relic;
+    for (const catalog of catalogs.values()) {
+      const fallback = catalog.byId.get(id);
+      if (fallback) return {...fallback, unavailableInVersion: catalog.gameVersion};
+    }
+  }
   function matches(relic, options) {
     return (options.character === 'all' || relic.character === options.character) &&
       (options.rarity === 'all' || relic.rarity === options.rarity) &&
       (!options.query || (relic.name + ' ' + relic.nameEn).toLocaleLowerCase().includes(options.query.toLocaleLowerCase().trim()));
   }
   function poolIds() {
-    const ids = state.rows.pool.filter(id => matches(byId.get(id), filters));
-    if (sort === 'name') ids.sort((a, b) => byId.get(a).name.localeCompare(byId.get(b).name, 'zh-CN'));
+    const ids = state.rows.pool.filter(id => matches(relicInfo(id), filters));
+    if (sort === 'name') ids.sort((a, b) => relicInfo(a).name.localeCompare(relicInfo(b).name, 'zh-CN'));
     if (sort === 'rarity') {
-      const order = Object.keys(data.rarityLabels);
-      ids.sort((a, b) => order.indexOf(byId.get(a).rarity) - order.indexOf(byId.get(b).rarity));
+      const order = Object.keys(catalogs.get(state.gameVersion).rarityLabels);
+      ids.sort((a, b) => order.indexOf(relicInfo(a).rarity) - order.indexOf(relicInfo(b).rarity));
     }
     return ids;
   }
   function relicButton(id) {
-    const relic = byId.get(id), button = element('button', 'relic-card');
+    const relic = relicInfo(id), button = element('button', 'relic-card');
     button.type = 'button'; button.draggable = true; button.dataset.id = id;
     button.title = relic.name + ' · ' + relic.rarityLabel + ' · ' + relic.characterLabel;
-    button.setAttribute('aria-label', relic.name + '，查看详情或选择评级');
+    const versionNote = relic.unavailableInVersion ? '版本外 · ' + relic.unavailableInVersion : '';
+    if (versionNote) button.title += ' · ' + versionNote;
+    button.setAttribute('aria-label', [relic.name, versionNote, '查看详情或选择评级'].filter(Boolean).join('，'));
     const img = element('img');
     img.src = relic.image; img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.width = 62; img.height = 62;
     button.append(img, element('span', '', relic.name));
+    if (versionNote) button.append(element('span', 'relic-version-badge', versionNote));
     button.addEventListener('click', () => { if (Date.now() - lastDrop > 250) showDetail(id); });
     return button;
   }
@@ -100,6 +113,20 @@
     renderZone($('pool'), ids, state.rows.pool.length ? '没有符合筛选条件的遗物' : '没有待排遗物，可在“选择遗物”中添加');
   }
   function render() {
+    const catalog = catalogs.get(state.gameVersion);
+    if (renderedVersion !== state.gameVersion) {
+      renderedVersion = state.gameVersion;
+      $('relic-version').value = state.gameVersion;
+      $('source-link').href = catalog.source.url;
+      for (const prefix of ['filter', 'catalog']) {
+        const selection = prefix === 'filter' ? filters : catalogFilters;
+        if (selection.character !== 'all' && !Object.hasOwn(catalog.characterLabels, selection.character)) selection.character = 'all';
+        populate(prefix + '-character', catalog.characterLabels, '全部角色');
+        $(prefix + '-character').value = selection.character;
+        populate(prefix + '-rarity', catalog.rarityLabels, '全部类别');
+        $(prefix + '-rarity').value = selection.rarity;
+      }
+    }
     $('board-title').textContent = state.title;
     document.title = '尖塔排表 · ' + state.title;
     const ranked = state.tiers.reduce((n, tier) => n + state.rows[tier.id].length, 0);
@@ -127,9 +154,10 @@
   }
   function showDetail(id) {
     selected = id;
-    const relic = byId.get(id), inPool = state.rows.pool.includes(id);
+    const relic = relicInfo(id), inPool = state.rows.pool.includes(id);
     $('detail-name').textContent = relic.name; $('detail-english').textContent = relic.nameEn;
-    $('detail-meta').textContent = relic.rarityLabel + ' · ' + relic.characterLabel + ' · ' + state.gameVersion;
+    const versionNote = relic.unavailableInVersion ? '版本外 · ' + relic.unavailableInVersion : state.gameVersion;
+    $('detail-meta').textContent = relic.rarityLabel + ' · ' + relic.characterLabel + ' · ' + versionNote;
     $('detail-description').textContent = relic.description || '该固定快照未提供效果说明。';
     $('detail-image').src = relic.image; $('detail-image').alt = relic.name;
     const moves = state.tiers.map(tier => {
@@ -157,7 +185,7 @@
     $('tier-position').value = String(tier ? state.tiers.indexOf(tier) : state.tiers.length);
     $('tier-dialog').showModal(); $('tier-name').focus();
   }
-  function catalogMatches() { return data.relics.filter(relic => matches(relic, catalogFilters)); }
+  function catalogMatches() { return catalogs.get(state.gameVersion).relics.filter(relic => matches(relic, catalogFilters)); }
   function catalogCount() { $('catalog-selection').textContent = '选中 ' + (draftPool.size + locked.size) + ' 件（' + locked.size + ' 件已评级）'; }
   function renderCatalog() {
     const visible = catalogMatches();
@@ -175,10 +203,6 @@
   }
   function populate(id, labels, all) {
     $(id).replaceChildren(new Option(all, 'all'), ...Object.entries(labels).map(([key, label]) => new Option(label, key)));
-  }
-  for (const prefix of ['filter', 'catalog']) {
-    populate(prefix + '-character', data.characterLabels, '全部角色');
-    populate(prefix + '-rarity', data.rarityLabels, '全部类别');
   }
   function connectFilters(prefix, getFilters, refresh) {
     for (const field of ['character', 'rarity']) $(prefix + '-' + field).addEventListener('change', event => { getFilters()[field] = event.target.value; refresh(); });
@@ -298,7 +322,8 @@
     const snapshot = clone(state), name = fileName();
     $('export-png').disabled = true; $('export-png').textContent = '正在生成…';
     try {
-      const result = await window.SpireRelicExport.render(snapshot, byId, Number($('export-resolution').value));
+      const relics = new Map(snapshot.tiers.flatMap(tier => snapshot.rows[tier.id]).map(id => [id, relicInfo(id, snapshot.gameVersion)]));
+      const result = await window.SpireRelicExport.render(snapshot, relics, Number($('export-resolution').value));
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(result.blob);
       $('dialog-image').src = previewUrl; $('download-link').href = previewUrl; $('download-link').download = name + '.png'; $('download-link').hidden = false;
@@ -316,7 +341,8 @@
       state = next; unreadable = null; undo = []; redo = []; warning(''); render(); notify('已同步另一标签页的遗物工作区');
     } catch { warning('另一标签页的遗物存档无效，当前排表保持不变。'); }
   });
-  $('relic-version').textContent = data.versionLabel + ' · ' + data.relics.length + ' 件';
-  $('source-link').href = data.source.url;
+  $('relic-version').replaceChildren(...[...catalogs.values()].map(catalog =>
+    new Option(catalog.versionLabel + ' · ' + catalog.relics.length + ' 件', catalog.gameVersion)));
+  $('relic-version').addEventListener('change', event => commit({...state, gameVersion: event.target.value}));
   render();
 })();

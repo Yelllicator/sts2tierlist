@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#141b18">
-  <meta name="description" content="杀戮尖塔2全职业卡牌排行。七套独立模板、完整双语卡面、自由选牌与筛选，本地保存。">
+  <meta name="description" content="杀戮尖塔2全职业卡牌排行。八套独立模板、完整双语卡面、自由选牌与筛选，本地保存。">
   <title>尖塔排表 · 静默猎手</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="screenshot-import.css"><link rel="stylesheet" href="scheme-library.css"><link rel="stylesheet" href="site-nav.css">
 </head>
@@ -19,13 +19,13 @@
       </div><section class="pool-section"><div class="pool-heading"><div><h2>待排卡牌 <span id="pool-count">0</span></h2></div><button id="manage-pool">＋ 选择卡牌</button></div>
       <div id="pool-filters" class="filter-bar" aria-label="待排筛选"></div>
       <div class="pool-sort-row"><span class="filter-label" id="pool-sort-label">排序</span><div id="pool-sort" role="group" aria-labelledby="pool-sort-label" aria-description="从左到右决定优先级。点击切换正序、逆序、不排；拖动或按 Alt 加左右键调整顺序。"></div></div>
-      <div class="filter-search-row"><label class="filter-search"><span class="sr-only">名称</span><input id="search" type="search" placeholder="搜索中文名 / 英文名" aria-label="搜索待排卡牌"></label><button id="reset-filters" class="quiet">重置筛选</button></div>
+      <div class="filter-search-row"><label class="filter-search"><input id="search" type="search" placeholder="搜索牌名、说明或关键词" aria-label="搜索待排卡牌"></label><button id="reset-filters" class="quiet">重置筛选</button></div>
       <div id="pool" class="card-zone pool" data-tier="pool" aria-label="待排卡牌"></div></section></div>
     </div>
   </main>
   <dialog id="card-dialog" aria-labelledby="detail-name">
     <div class="card-dialog-header"><span id="detail-number"></span><button id="close-card" aria-label="关闭卡牌图鉴" autofocus>×</button></div>
-    <div id="detail-content"><button id="zoom-card" class="detail-image-button" title="放大卡牌" aria-label="放大完整卡面"><img id="detail-image" alt=""></button><div class="detail-info"><p id="detail-meta" class="eyebrow"></p><h2 id="detail-name"></h2><p id="detail-english"></p><div class="move-label">移至评级</div><div id="move-actions"></div><button id="move-pool" class="full-width">移回待排区</button></div></div>
+    <div id="detail-content"><button id="zoom-card" class="detail-image-button" title="放大卡牌" aria-label="放大完整卡面"><img id="detail-image" alt=""></button><div class="detail-info"><p id="detail-meta" class="eyebrow"></p><h2 id="detail-name"></h2><p id="detail-english"></p><p id="detail-keywords" hidden></p><div class="move-label">移至评级</div><div id="move-actions"></div><button id="move-pool" class="full-width">移回待排区</button></div></div>
   </dialog>
   <dialog id="image-dialog" aria-labelledby="dialog-caption"><div class="preview-tools"><button id="preview-zoom" hidden>放大到原始尺寸</button><button class="close-dialog" aria-label="关闭">×</button></div><img id="dialog-image" alt=""><p id="dialog-caption"></p><a id="download-link" hidden>保存 PNG 图片 ↓</a></dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-message"></p><div class="dialog-actions"><button id="cancel-confirm">取消</button><button id="accept-confirm" class="primary">确认</button></div></dialog>
@@ -35,7 +35,7 @@
     <div class="catalog-heading"><div><h2 id="catalog-title">选择待排卡牌</h2></div><button id="close-catalog" aria-label="关闭卡池选择">×</button></div>
     <div class="catalog-version-row"><label for="catalog-version">卡库版本 <select id="catalog-version" aria-label="卡库版本" aria-describedby="catalog-version-hint"></select></label><p id="catalog-version-hint">与排表版本不同的牌置顶，相同的牌灰显仍可选。跨版本添加会保留所选卡面与规则；当前卡库也显示已选版本外牌。</p></div>
     <div id="catalog-filters" class="filter-bar catalog-filters" aria-label="卡库筛选"></div>
-    <div class="filter-search-row catalog-search-row"><label class="filter-search"><span class="sr-only">名称</span><input id="catalog-search" type="search" placeholder="搜索中文名 / 英文名" aria-label="搜索卡库"></label><button id="catalog-reset" class="quiet">重置筛选</button></div>
+    <div class="filter-search-row catalog-search-row"><label class="filter-search"><input id="catalog-search" type="search" placeholder="搜索牌名、说明或关键词" aria-label="搜索卡库"></label><button id="catalog-reset" class="quiet">重置筛选</button></div>
     <div class="catalog-bulk"><span id="catalog-results" role="status"></span><button id="catalog-select">全选筛选结果</button><button id="catalog-deselect">移除筛选结果</button></div>
     <div id="catalog-grid" aria-label="可选卡牌"></div>
     <div class="catalog-actions"><span id="catalog-selection" role="status"></span><button id="cancel-catalog">取消</button><button id="apply-catalog" class="primary">应用卡池</button></div>

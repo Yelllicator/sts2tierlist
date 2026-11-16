@@ -16,6 +16,9 @@
     const stored=localStorage.getItem(KEY);
     if(stored){unreadableWorkspace=stored;workspace=model.validateWorkspace(JSON.parse(stored));unreadableWorkspace=null;}
     else{const legacy=localStorage.getItem(LEGACY_KEY);if(legacy)workspace.boards.silent=model.validate(JSON.parse(legacy));}
+    // Reopen every template on the latest rules without rebuilding its selected pool.
+    workspace.boards=Object.fromEntries(Object.entries(workspace.boards).map(([id,board])=>
+      [id,model.setGameVersion(board,versions.defaultVersion)]));
     const size=Number(localStorage.getItem(LEGACY_KEY+'-size'));
     if(size>=68&&size<=132){$('card-size').value=size;document.documentElement.style.setProperty('--card-width',size+'px');}
   }catch{setTimeout(()=>notify('本地存档无法读取，原数据仍保留；已载入空白排表'),0);}

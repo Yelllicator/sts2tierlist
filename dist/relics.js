@@ -15,7 +15,10 @@
   let filters = defaultFilters(), catalogFilters = defaultFilters(), sort = 'manual';
   try {
     unreadable = localStorage.getItem(KEY);
-    if (unreadable) state = model.validate(JSON.parse(unreadable));
+    if (unreadable) {
+      const saved = model.validate(JSON.parse(unreadable));
+      state = model.validate({...saved, gameVersion: latest.gameVersion});
+    }
     unreadable = null;
   } catch {
     warning('遗物存档无法读取，原数据已保留。当前显示空白排表；编辑时会先备份原数据。');
